@@ -22,6 +22,9 @@ The toolkit is contained within the `FastPyTorchRRAM` class. Simply add the clas
 
 ```bash
 pip install torch
+```
 
 ## Usage
 The following example demonstrates the standard workflow for simulating all non-idealities on a pretrained PyTorch model.
+
+
