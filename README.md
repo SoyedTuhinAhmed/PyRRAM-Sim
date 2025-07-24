@@ -34,7 +34,7 @@ import torch.nn as nn
 # Assume 'pretrained_model', 'dataloader', and 'criterion' are already defined
 # Assume helper functions '_apply_rram_effects' and 'validate' are available
 
-# 1. Initialize the simulator with your model and hardware specs
+# Initialize the simulator with your model and hardware specs
 rram_sim = FastPyTorchRRAM(
     pretrained_model=my_model,
     G_min=1e-6,         # Minimum conductance (Siemens)
@@ -42,23 +42,23 @@ rram_sim = FastPyTorchRRAM(
     differential=True
 )
 
-# 2. Apply a one-time programming error to the ideal conductances
+# Apply a one-time programming error to the ideal conductances
 # This simulates the initial write operation to the chip.
 prog_error_params = {'alpha_ind': 0.03, 'fault_model': 'state_independent'}
 rram_sim.apply_programming_error(**prog_error_params)
 
-# 3. Apply short-term conductance relaxation
+# Apply short-term conductance relaxation
 # This simulates the rapid drift that occurs shortly after programming.
 relax_params = {'alpha_ind': 0.07, 'fault_model': 'state_independent'}
 rram_sim.apply_conductance_relaxation(**relax_params)
 
-# 4. Apply long-term relative drift
+# Apply long-term relative drift
 # This uses the hardware-accurate model from the DoRA paper.
 # The paper suggests drift is typically < 20% of the target conductance.
 drift_params = {'relative_drift': 0.20}
 rram_sim.apply_relative_drift(**drift_params)
 
-# 5. Get the final noisy model and run inference
+# Get the final noisy model and run inference
 # This is the only point where conductances are converted back to weights.
 final_noisy_model = rram_sim.get_noisy_model_for_inference()
 accuracy = validate(final_noisy_model, dataloader, criterion, device)
