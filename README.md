@@ -136,13 +136,9 @@ If you use PyRRAM-Sim in your research, we kindly ask that you cite the followin
 
 ```bash
 @article{Ahmed2025PyRRAMSim,
-  title   = {Accurate Mapping and Inferencing of Large Vision and Language Models Based on RRAM-based Compute-in-Memory Architecture using Robust Multi-domain Low-Rank Adaptation},
-  author  = {Your Name and Co-authors},
-  journal = {Journal/Conference Name},
+  title   = {PyRRAM-Sim: A Toolkit for RRAM Non-Ideality Simulation},
+  author  = {Ahmed, Soyed Tuhin},
   year    = {2025},
-  volume  = {XX},
-  number  = {YY},
-  pages   = {ZZZ--ZZZ}
 }
 ```
 
