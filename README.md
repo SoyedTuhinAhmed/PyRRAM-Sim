@@ -135,7 +135,7 @@ The non-ideality models implemented in this toolkit are phenomenological, design
 If you use PyRRAM-Sim in your research, we kindly ask that you cite the following paper:
 
 ```bash
-@article{YourLastName2025PyRRAMSim,
+@article{Ahmed2025PyRRAMSim,
   title   = {Accurate Mapping and Inferencing of Large Vision and Language Models Based on RRAM-based Compute-in-Memory Architecture using Robust Multi-domain Low-Rank Adaptation},
   author  = {Your Name and Co-authors},
   journal = {Journal/Conference Name},
