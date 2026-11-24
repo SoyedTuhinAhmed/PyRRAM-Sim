@@ -1,115 +1,135 @@
+import math
+
 import torch
 
-def _apply_rram_effects(
-    G_target: torch.Tensor,
-    G_min: float,
+# Per-cell stuck-at fault codes.
+HEALTHY, STUCK_ON, STUCK_OFF, STUCK_INT = 0, 1, 2, 3
+
+
+def _rand(shape, device, generator=None):
+    """Uniform [0, 1) samples; drawn on the CPU when a dedicated generator is given."""
+    if generator is None:
+        return torch.rand(shape, device=device)
+    return torch.rand(shape, generator=generator).to(device)
+
+
+def _randint(low, high, shape, device, generator=None):
+    if generator is None:
+        return torch.randint(low, high, shape, device=device)
+    return torch.randint(low, high, shape, generator=generator).to(device)
+
+
+def conductance_noise(
+    G: torch.Tensor,
     G_max: float,
-    delta_G: float,
-    alpha_ind_param: float,
-    alpha_prop_param: float,
+    alpha_ind: float,
+    alpha_prop: float,
     fault_model: str,
     clamp_noise: bool,
-    block_size: tuple[int,int]
 ) -> torch.Tensor:
     """
-    Applies quantization and RRAM noise to a target conductance tensor, _block-wise_.
+    Gaussian conductance noise for every cell of G.
 
     Args:
-        G_target:        torch.Tensor of any shape (>=2D) representing target conductances.
-        G_min, G_max:    floats, device conductance range.
-        delta_G:         float, quantization step size.
-        alpha_ind_param: float or None, fraction of G_max for state-independent noise.
-        alpha_prop_param:float or None, fraction of G for state-proportional noise.
-        fault_model:     one of {"state_independent","state_proportional","both"}.
-        clamp_noise:     bool, whether to clamp noise at ±3σ.
-        block_size:      (m, m) tuple: size of each square block for noise injection.
+        G:           conductance tensor of any shape (Siemens).
+        G_max:       maximum device conductance.
+        alpha_ind:   fraction of G_max used as sigma of the state-independent noise.
+        alpha_prop:  fraction of G used as sigma of the state-proportional noise.
+        fault_model: one of {"state_independent", "state_proportional", "both"}.
+        clamp_noise: clamp the noise at +-3 sigma (the state-independent sigma when both are on).
 
     Returns:
-        torch.Tensor of same shape as G_target: quantized + noisy conductances, clamped to [G_min, G_max].
+        Noise tensor with the same shape as G.
     """
-    # Quantize to nearest RRAM level
-    levels = torch.round((G_target - G_min) / delta_G)
-    G_q = G_min + levels * delta_G
+    if fault_model not in ("state_independent", "state_proportional", "both"):
+        raise ValueError(f"Unknown fault_model: {fault_model}")
 
-    # Prepare an empty noise tensor
-    noise = torch.zeros_like(G_q)
+    noise = torch.zeros_like(G)
+    clamp_limit = None
 
-    # If last two dims are at least block-sized, do block-wise injection
-    if G_q.ndim >= 2 and block_size is not None:
-        # Dimensions of blocks
-        block_h, block_w = block_size
+    if fault_model in ("state_independent", "both"):
+        if alpha_ind is None:
+            raise ValueError("alpha_ind is required for state_independent noise.")
+        sigma_ind = alpha_ind * G_max
+        noise = noise + torch.randn_like(G) * sigma_ind
+        if clamp_noise:
+            clamp_limit = 3.0 * sigma_ind
 
-        # collapse leading dims so we can loop over 2D slices
-        *lead_dims, H, W = G_q.shape
-        G_flat = G_q.reshape(-1, H, W)
-        noise_flat = torch.zeros_like(G_flat)
+    if fault_model in ("state_proportional", "both"):
+        if alpha_prop is None:
+            raise ValueError("alpha_prop is required for state_proportional noise.")
+        sigma_prop = alpha_prop * G
+        noise = noise + torch.randn_like(G) * sigma_prop
+        if clamp_noise and clamp_limit is None:
+            clamp_limit = 3.0 * sigma_prop
 
-        for idx in range(G_flat.size(0)):
-            slice_q = G_flat[idx]
-            slice_noise = torch.zeros_like(slice_q)
+    if clamp_limit is not None:
+        noise = torch.clamp(noise, min=-clamp_limit, max=clamp_limit)
+    return noise
 
-            # tile over non-overlapping blocks
-            for i in range(0, H, block_h):
-                for j in range(0, W, block_w):
-                    block_q = slice_q[i:i+block_h, j:j+block_w]
-                    local_noise = torch.zeros_like(block_q)
-                    local_clamp = None
 
-                    # State-independent noise
-                    if fault_model in ("state_independent", "both"):
-                        if alpha_ind_param is None:
-                            raise ValueError("alpha_ind is required for state_independent noise.")
-                        alpha_ind = alpha_ind_param * G_max
-                        local_noise = local_noise + torch.randn_like(block_q) * alpha_ind
-                        if clamp_noise:
-                            # scalar clamp limit for this block
-                            local_clamp = 3.0 * alpha_ind
+def sample_stuck_at_codes(
+    shape,
+    p_on: float,
+    p_off: float,
+    p_int: float,
+    device: torch.device,
+    generator: torch.Generator = None,
+) -> torch.Tensor:
+    """
+    Draws an i.i.d. stuck-at fault map, one independent draw per physical cell.
 
-                    # State-proportional noise
-                    if fault_model in ("state_proportional", "both"):
-                        if alpha_prop_param is None:
-                            raise ValueError("alpha_prop is required for state_proportional noise.")
-                        alpha_prop = alpha_prop_param * block_q
-                        local_noise = local_noise + torch.randn_like(block_q) * alpha_prop
-                        if clamp_noise and local_clamp is None:
-                            # per-element clamp limits
-                            local_clamp = 3.0 * alpha_prop
+    The three fault types are mutually exclusive: a single uniform draw u per cell gives
+    STUCK_ON if u < p_on, STUCK_OFF if u < p_on + p_off, STUCK_INT if u < p_on + p_off + p_int,
+    and HEALTHY otherwise.
 
-                    # Clamp this block’s noise if requested
-                    if clamp_noise and local_clamp is not None:
-                        local_noise = local_noise.clamp(-local_clamp, local_clamp)
+    Returns:
+        uint8 tensor of fault codes (HEALTHY, STUCK_ON, STUCK_OFF, STUCK_INT).
+    """
+    u = _rand(shape, device, generator)
+    codes = torch.full(shape, HEALTHY, dtype=torch.uint8, device=device)
+    codes = codes.masked_fill(u < p_on, STUCK_ON)
+    codes = codes.masked_fill((u >= p_on) & (u < p_on + p_off), STUCK_OFF)
+    codes = codes.masked_fill((u >= p_on + p_off) & (u < p_on + p_off + p_int), STUCK_INT)
+    return codes
 
-                    # write back
-                    slice_noise[i:i+block_h, j:j+block_w] = local_noise
 
-            noise_flat[idx] = slice_noise
+def intermediate_stuck_conductance(
+    shape,
+    G_min: float,
+    G_max: float,
+    n_levels: int,
+    int_dist: str,
+    int_range: tuple[float, float],
+    device: torch.device,
+    generator: torch.Generator = None,
+) -> torch.Tensor:
+    """
+    Conductances for cells stuck at an intermediate state, one sample per cell of `shape`.
 
-        # reshape noise back to original
-        noise = noise_flat.reshape_as(G_q)
+    Args:
+        int_dist:  "levels"     -> uniform over the discrete interior levels (stuck-at-L, for MLC);
+                   "continuous" -> uniform in the conductance band (undefined 'U' state, for binary).
+        int_range: (lo, hi) band as fractions of [G_min, G_max], e.g. (0.0, 1.0) for the full range.
+    """
+    lo, hi = int_range
+    if not 0.0 <= lo <= hi <= 1.0:
+        raise ValueError(f"int_range must satisfy 0 <= lo <= hi <= 1, got {int_range}")
+    G_range = G_max - G_min
 
-    else:
-        # Fallback for 1D or scalar: original element-wise behavior
-        clamp_limit = None
+    if int_dist == "continuous":
+        return G_min + G_range * (lo + (hi - lo) * _rand(shape, device, generator))
 
-        if fault_model in ("state_independent", "both"):
-            if alpha_ind_param is None:
-                raise ValueError("alpha_ind is required for state_independent noise.")
-            alpha_ind = alpha_ind_param * G_max
-            noise = noise + torch.randn_like(G_q) * alpha_ind
-            if clamp_noise:
-                clamp_limit = 3.0 * alpha_ind
+    if int_dist == "levels":
+        top = n_levels - 1
+        k_lo = max(1, math.ceil(lo * top - 1e-9))
+        k_hi = min(top - 1, math.floor(hi * top + 1e-9))
+        if k_lo > k_hi:
+            raise ValueError(
+                f"No interior level of a {n_levels}-level cell lies in int_range={int_range}; "
+                "use int_dist='continuous'."
+            )
+        k = _randint(k_lo, k_hi + 1, shape, device, generator)
+        return G_min + k.to(torch.float32) * (G_range / top)
 
-        if fault_model in ("state_proportional", "both"):
-            if alpha_prop_param is None:
-                raise ValueError("alpha_prop is required for state_proportional noise.")
-            alpha_prop = alpha_prop_param * G_q
-            noise = noise + torch.randn_like(G_q) * alpha_prop
-            if clamp_noise and clamp_limit is None:
-                clamp_limit = 3.0 * alpha_prop
-
-        if clamp_noise and clamp_limit is not None:
-            noise = noise.clamp(-clamp_limit, clamp_limit)
-
-    # Inject noise and clamp final conductance
-    G_noisy = G_q + noise
-    return G_noisy.clamp(min=G_min, max=G_max)
+    raise ValueError(f"Unknown int_dist: {int_dist}")
