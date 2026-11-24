@@ -5,6 +5,8 @@ import torch
 # Per-cell stuck-at fault codes.
 HEALTHY, STUCK_ON, STUCK_OFF, STUCK_INT = 0, 1, 2, 3
 
+BOLTZMANN_EV = 8.617333262e-5  # Boltzmann constant in eV/K
+
 
 def _rand(shape, device, generator=None):
     """Uniform [0, 1) samples; drawn on the CPU when a dedicated generator is given."""
@@ -19,6 +21,25 @@ def _randint(low, high, shape, device, generator=None):
     return torch.randint(low, high, shape, generator=generator).to(device)
 
 
+def _randn_like(G, generator=None):
+    if generator is None:
+        return torch.randn_like(G)
+    if generator.device != G.device:
+        return torch.randn(G.shape, generator=generator, dtype=G.dtype).to(G.device)
+    return torch.randn(G.shape, generator=generator, device=G.device, dtype=G.dtype)
+
+
+def arrhenius_factor(temperature_C: float, Ea_eV: float, T0_C: float = 25.0) -> float:
+    """
+    Thermal acceleration factor exp(Ea / kB * (1/T0 - 1/T)) of a noise coefficient,
+    alpha(T) = alpha0 * arrhenius_factor(T, Ea, T0) [HAT-FI, Eq. 3]. Temperatures in Celsius.
+    """
+    if Ea_eV is None:
+        raise ValueError("An activation energy Ea_eV is required for temperatures other than T0.")
+    T, T0 = temperature_C + 273.15, T0_C + 273.15
+    return math.exp(Ea_eV / BOLTZMANN_EV * (1.0 / T0 - 1.0 / T))
+
+
 def conductance_noise(
     G: torch.Tensor,
     G_max: float,
@@ -26,6 +47,7 @@ def conductance_noise(
     alpha_prop: float,
     fault_model: str,
     clamp_noise: bool,
+    generator: torch.Generator = None,
 ) -> torch.Tensor:
     """
     Gaussian conductance noise for every cell of G.
@@ -37,6 +59,7 @@ def conductance_noise(
         alpha_prop:  fraction of G used as sigma of the state-proportional noise.
         fault_model: one of {"state_independent", "state_proportional", "both"}.
         clamp_noise: clamp the noise at +-3 sigma (the state-independent sigma when both are on).
+        generator:   optional generator on G's device (default: the global RNG).
 
     Returns:
         Noise tensor with the same shape as G.
@@ -51,7 +74,7 @@ def conductance_noise(
         if alpha_ind is None:
             raise ValueError("alpha_ind is required for state_independent noise.")
         sigma_ind = alpha_ind * G_max
-        noise = noise + torch.randn_like(G) * sigma_ind
+        noise = noise + _randn_like(G, generator) * sigma_ind
         if clamp_noise:
             clamp_limit = 3.0 * sigma_ind
 
@@ -59,7 +82,7 @@ def conductance_noise(
         if alpha_prop is None:
             raise ValueError("alpha_prop is required for state_proportional noise.")
         sigma_prop = alpha_prop * G
-        noise = noise + torch.randn_like(G) * sigma_prop
+        noise = noise + _randn_like(G, generator) * sigma_prop
         if clamp_noise and clamp_limit is None:
             clamp_limit = 3.0 * sigma_prop
 

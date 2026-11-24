@@ -2,11 +2,20 @@
 
 PyRRAM-Sim is a lightweight, PyTorch-based simulation tool designed for researchers and engineers working on Deep Neural Networks (DNNs) with RRAM-based Compute-in-Memory (CIM) architectures. It provides an efficient, modular framework to simulate key hardware non-idealities, allowing for the evaluation of model robustness before hardware deployment.
 
-This toolkit simulates the sequential, cumulative effects of permanent stuck-at faults, programming errors, short-term conductance relaxation, and long-term, state-proportional conductance drift. The models are based on phenomena described in leading academic research to ensure hardware-accurate simulation.
+This toolkit simulates the sequential, cumulative effects of permanent stuck-at faults, programming errors, short-term conductance relaxation, long-term, state-proportional conductance drift, per-inference read noise and temperature. The models are based on phenomena described in leading academic research to ensure hardware-accurate simulation.
+
+It also evaluates and hardens instruction-tuned LLMs: the preference-inversion (flip) rate of aligned models under RRAM non-idealities and hardware-aware DPO (HARD-DPO) [16], and mixtures of fault-tolerant LoRA experts, merged at design time (MoF-LoRA) [17] or kept as separate adapters with telemetry-guided selection (Sparse-MoF) [18].
 
 ---
 
 ## What's New
+
+* **Alignment robustness of LLMs** (`src/alignment.py`, `llm_main.py eval`): preference accuracy and preference flip rate of instruction-tuned LLMs on UltraFeedback [21, 22] under RRAM non-idealities, with Monte-Carlo chips and 95% confidence intervals [16]. Only the static projections (q/k/v/o, gate/up/down) are mapped to RRAM; tied embeddings and `lm_head` stay digital.
+* **HARD-DPO** (`llm_main.py train-hard-dpo`): hardware-aware DPO [19] with LoRA [20], log-normal programming-noise injection, clean-noisy KL consistency and 3-sigma clipping [16]. Existing PEFT checkpoints of HARD-DPO load directly.
+* **Fault-tolerant LoRA experts** (`src/lora.py`, `src/mof.py`): programming-error, drift and stuck-at experts [17], plus read-noise and temperature experts [18], for `Linear` and `Conv2d` layers. Experts stay separate: any subset can run digitally next to the crossbar (hybrid), be merged into the programmed weights, or be programmed into their own cells.
+* **Sparse-MoF expert selection** (`mof.SparseMoF`): an online test of the simulated chip (stuck-cell rate, drift, read noise, temperature sensor) selects the experts; when the set changes, the experts are re-merged and the chip is reprogrammed with its stuck-at map intact [18].
+* **Read noise and temperature**: per-inference, state-proportional read noise, and Arrhenius scaling of programming error and read noise with a user-supplied activation energy.
+* **Simulator additions**: `target_modules` / `exclude_modules`, deployment clipping (`clip_sigma`), `reprogram()` on the same faulty chip, `fault_map()` (March-test equivalent), `telemetry()`, and `low_memory=True`, which replays every operation layer by layer instead of storing cell states, for multi-billion-parameter models.
 
 * **Stuck-at fault injection** (`apply_stuck_at_faults`): cells stuck at `G_on`, `G_off` or an intermediate state, for binary and multi-level cells. Each cell of a differential pair fails independently, the healthy partner of a stuck cell can optionally be reprogrammed to compensate, and `fault_seed` reproduces the same faulty chip.
 * **Multi-level and bit-sliced cells**: `n_levels` conductance levels per cell and `cells_per_weight` cells per weight, e.g. 8-bit weights on one 256-level cell or on eight binary cells.
@@ -25,7 +34,9 @@ This toolkit simulates the sequential, cumulative effects of permanent stuck-at 
 * **Hardware-Accurate Drift Model**: Implements a state-proportional drift model based on findings from recent literature.
 * **Differential Pair Support**: Natively supports the simulation of differential RRAM cells (`W = Gp - Gn`) for signed weight representation, in two-sided and one-sided styles.
 * **Multi-Level and Bit-Sliced Cells**: Any number of levels per cell, and weights bit-sliced across several cells.
-* **PyTorch Integration**: Seamlessly integrates with existing PyTorch models and validation pipelines.
+* **LLM Alignment Evaluation**: Preference flip rate of instruction-tuned LLMs on simulated RRAM chips, and HARD-DPO training.
+* **Fault-Tolerant Experts**: MoF-LoRA and Sparse-MoF experts for programming error, drift, stuck-at faults, read noise and temperature, with telemetry-guided selection.
+* **PyTorch Integration**: Seamlessly integrates with existing PyTorch models (including Hugging Face Transformers) and validation pipelines.
 
 ---
 
@@ -35,14 +46,21 @@ The toolkit is contained within the `PyRRAMSimulator` class in `src/`. Simply ad
 
 ```bash
 pip install torch torchvision
+pip install transformers datasets   # only for the LLM features (alignment.py, llm_main.py)
 ```
 
 | File | Contents |
 |---|---|
-| `src/pytorchrram.py` | `PyRRAMSimulator`: weight-to-conductance mapping, simulation pipeline, Monte-Carlo runs |
-| `src/rram_noise_model.py` | Conductance noise and stuck-at fault models |
+| `src/pytorchrram.py` | `PyRRAMSimulator`: weight-to-conductance mapping, simulation pipeline, Monte-Carlo runs, read noise, temperature, telemetry |
+| `src/rram_noise_model.py` | Conductance noise, stuck-at fault and Arrhenius models |
+| `src/lora.py` | LoRA expert banks for `Linear` and `Conv2d` layers: activation, merging, checkpoints, PEFT import |
+| `src/train_noise.py` | Training-time noise presets of HARD-DPO, MoF-LoRA and HAT-FI, and the simulator-exact preset |
+| `src/mof.py` | Expert training stages (prog, drift, saf, read, temp) and the Sparse-MoF controller |
+| `src/alignment.py` | Preference scoring, flip-rate evaluation and HARD-DPO training for LLMs |
 | `src/helper.py` | `validate` (loss, accuracy) and `set_seed` |
 | `main.py` | Command-line evaluation of a CIFAR-10-trained ResNet18 |
+| `llm_main.py` | Command line for LLMs: `eval`, `train-hard-dpo`, `train-experts` |
+| `mof_main.py` | Fault-tolerant experts on CIFAR-10 ResNet18: unprotected vs. MoF-LoRA vs. Sparse-MoF |
 
 ---
 
@@ -92,6 +110,73 @@ python main.py --dataset-path ./data --checkpoint my_resnet18.pth \
 | `--apply-relaxation` | off | Conductance relaxation, with `--relax-alpha-ind` (0.07) |
 | `--apply-drift` | off | Relative drift, with `--relative-drift` (0.2) |
 | `--seed` | 42 | Global random seed |
+
+### LLM Alignment Robustness and HARD-DPO
+
+`llm_main.py` works with any Hugging Face causal LM that has a chat template (Qwen2.5, Llama-3.1, Gemma-2, ...). The model and UltraFeedback (`HuggingFaceH4/ultrafeedback_binarized`) [21, 22] are downloaded on first use. By default only the projections `q/k/v/o_proj` and `gate/up/down_proj` are mapped to RRAM, on 8-bit (256-level) two-sided differential cells with `G` = 1-100 µS; programming error is state-independent, `sigma_G = alpha * G_max` [16].
+
+```bash
+# Flip rate of the instruction-tuned model: 500 held-out pairs, 10 chips per alpha
+python llm_main.py eval --model Qwen/Qwen2.5-0.5B-Instruct --pairs 500 \
+    --alphas 0 0.002 0.004 0.006 0.008 --chips 10 --out base.json
+
+# HARD-DPO: 1000 steps on train_prefs[:10000] (paper defaults), saves the LoRA expert
+python llm_main.py train-hard-dpo --model Qwen/Qwen2.5-0.5B-Instruct --steps 1000 --out hard_dpo.pt
+
+# Deploy it merged into the crossbar and clipped at 3 sigma, then evaluate
+python llm_main.py eval --model Qwen/Qwen2.5-0.5B-Instruct --experts hard_dpo.pt \
+    --deploy merged --clip-sigma 3 --out hard_dpo.json
+
+# A HARD-DPO checkpoint from the original PEFT scripts (lora_alpha 16), adapters kept digital
+python llm_main.py eval --peft-adapter noise_robust_dpo_qwen2.5_0.5b.pt --lora-alpha 16 --deploy hybrid
+
+# Released-script protocol (train_prefs[:500], 50 pairs per chip, G = 50-350 uS unquantized,
+# every Linear including lm_head) to reproduce previously published numbers
+python llm_main.py eval --legacy-eval --peft-adapter noise_robust_dpo_qwen2.5_0.5b.pt
+
+# Fault-tolerant experts trained with the DPO objective; the SAF expert targets chip --fault-seed 7
+python llm_main.py train-experts --train prog drift saf read --recipe hat-fi-llm --objective dpo \
+    --steps 500 --p-on 0.01 --p-off 0.01 --fault-seed 7 --out experts.pt
+
+# Sparse-MoF on that chip: telemetry selects the experts per chip
+python llm_main.py eval --experts experts.pt --select-experts --p-on 0.01 --p-off 0.01 --fault-seed 7 \
+    --drift 0.05 --read-alpha 0.005 --alphas 0.004
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--model` | `Qwen/Qwen2.5-0.5B-Instruct` | Hugging Face model id or local path |
+| `--split`, `--pairs` | `test_prefs`, 500 | Evaluation pairs (`train-*`: `train_prefs`, `--max-prefs` 10000) |
+| `--alphas`, `--chips` | 0 ... 0.008, 10 | Programming-error sweep and Monte-Carlo chips per point |
+| `--fault-model` | `state_independent` | Or `state_proportional`, `both` |
+| `--n-levels`, `--cells-per-weight`, `--diff-style` | 256, 1, `two_sided` | Cells, as in `main.py` |
+| `--target-modules` | the 7 projections | Layers mapped to RRAM and adapted by LoRA |
+| `--clip-sigma` | none | Clip each weight tensor to `+-k std` before mapping |
+| `--experts`, `--peft-adapter` | none | Expert checkpoint of this tool, or a PEFT LoRA state dict (`--lora-alpha`, `--peft-name`) |
+| `--active` | all loaded | Experts to switch on |
+| `--deploy` | `merged` | `merged` (experts in the crossbar), `hybrid` (experts digital), `analog-lora` (factors on own cells) |
+| `--p-on`, `--p-off`, `--fault-seed`, `--compensate` | 0, 0, none, off | Stuck-at faults of the chip |
+| `--relax-alpha`, `--drift`, `--read-alpha` | 0 | Relaxation, relative drift, per-inference read noise |
+| `--temperature`, `--ea` | 25, none | Operating temperature (C) and activation energy (eV, required above 25 C) |
+| `--select-experts` | off | Sparse-MoF selection from telemetry on every chip |
+| `--low-memory` | off | Replay operations layer by layer (no per-cell state; for large models) |
+| `--legacy-eval` | off | Protocol of the released HARD-DPO scripts |
+| `--sigma`, `--noise`, `--noise-target` | 0.008, `lognormal`, `merged` | HARD-DPO training noise; `--noise simulator` uses the simulator-exact preset, `--noise-target base` perturbs only `W0` like the released script |
+| `--beta`, `--lambda-kd`, `--kd-tau`, `--rank`, `--lora-alpha`, `--lr`, `--train-batch` | 0.1, 0.5, 1, 8, 16, 5e-5, 4 | HARD-DPO hyperparameters |
+| `--train`, `--recipe`, `--objective` | `prog drift saf`, `hat-fi-llm`, `dpo` | Experts to train, coefficient recipe, task loss (`dpo` or `sft`) |
+
+### Fault-Tolerant Experts on CIFAR-10
+
+`mof_main.py` trains the five experts on CIFAR-10 ResNet18 (weight-space LoRA on all `Conv2d` layers [18]) for a target chip and compares the three deployments under cumulative non-idealities:
+
+```bash
+python mof_main.py --dataset-path ./data --steps 300 --save-experts resnet18_experts.pt \
+    --temperature 85 --ea 0.1 --train-temperature 85
+# re-evaluate saved experts, e.g. on a different fault rate
+python mof_main.py --dataset-path ./data --load-experts resnet18_experts.pt --p-saf 0.02
+```
+
+`--temperature`, `--ea` and `--train-temperature` are needed only for the temperature expert and condition; without them those are skipped. The chip defaults are `--prog-alpha 0.03`, `--drift 0.05`, `--p-saf 0.04` (half stuck-on, half stuck-off, `--fault-seed 1`) and `--read-alpha 0.02`.
 
 ### Python API
 
@@ -171,6 +256,63 @@ accuracy = rram_sim.simulate(dataloader, criterion,
                              drift_params={'relative_drift': 0.2})
 ```
 
+Preference flip rate of an instruction-tuned LLM, and HARD-DPO:
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from alignment import PreferenceScorer, load_ultrafeedback, evaluate_flip_rate, train_hard_dpo, HardDPOConfig
+from lora import DEFAULT_TARGET_MODULES, set_merge
+
+name = "Qwen/Qwen2.5-0.5B-Instruct"
+tok = AutoTokenizer.from_pretrained(name)
+llm = AutoModelForCausalLM.from_pretrained(name).to(device).eval()
+scorer = PreferenceScorer(tok, batch_size=8)
+pairs = load_ultrafeedback("test_prefs", n=500)
+
+# Only the projections go to RRAM; copy_model=False avoids a third copy of the LLM
+sim = PyRRAMSimulator(llm, G_min=1e-6, G_max=100e-6, n_levels=256, device=device,
+                      target_modules=DEFAULT_TARGET_MODULES, copy_model=False)
+res = evaluate_flip_rate(sim, scorer, pairs, alphas=(0.0, 0.004, 0.008), n_chips=10)
+print(res["per_alpha"]["0.008"]["flip_rate"])   # {'mean': ..., 'std': ..., 'ci95': ...}
+
+# HARD-DPO trains a LoRA expert in place; deploy it merged into the crossbar, clipped at 3 sigma
+train_hard_dpo(llm, scorer, load_ultrafeedback("train_prefs", n=10000), HardDPOConfig(steps=1000))
+set_merge(llm, True)
+sim = PyRRAMSimulator(llm, 1e-6, 100e-6, n_levels=256, device=device,
+                      target_modules=DEFAULT_TARGET_MODULES, clip_sigma=3.0, copy_model=False)
+res = evaluate_flip_rate(sim, scorer, pairs, alphas=(0.0, 0.004, 0.008), n_chips=10)
+```
+
+Fault-tolerant experts for a target chip, then MoF-LoRA (static merge) and Sparse-MoF (telemetry-guided selection):
+
+```python
+import lora, mof
+
+lora.add_lora(my_model, target_modules=None)        # every Linear / Conv2d except lm_head
+chip_cfg = dict(stuck_at_params={'p_on': 0.02, 'p_off': 0.02, 'fault_seed': 7},
+                programming_error_params={'alpha_ind': 0.03},
+                relaxation_params={'alpha_ind': 0.0},
+                drift_params={'relative_drift': 0.05})
+chip = PyRRAMSimulator(my_model, 1e-6, 100e-6, n_levels=256, device=device, copy_model=False)
+chip.apply_stuck_at_faults(**chip_cfg['stuck_at_params'])   # the SAF expert learns this chip
+
+loss_fn = lambda m, batch: criterion(m(batch[0].to(device)), batch[1].to(device))
+mof.train_experts(my_model, loss_fn, train_loader, steps=300,
+                  experts=("prog", "drift", "saf", "read"), recipe="hat-fi-cnn", sim=chip)
+
+# MoF-LoRA: all chain experts merged into the crossbar at design time
+lora.set_active(my_model, ["prog", "drift", "saf"])
+lora.set_merge(my_model, True)
+acc_mof = chip.simulate(dataloader, criterion, **chip_cfg)
+
+# Sparse-MoF: start with the always-on expert, measure the chip, select, re-merge and reprogram
+ctl = mof.SparseMoF(chip, reprogram_params={k: v for k, v in chip_cfg.items() if k != 'stuck_at_params'})
+ctl.reset()
+chip.program(**chip_cfg)
+print(ctl.step())   # {'telemetry': {...}, 'active': ['prog', 'drift', 'saf'], 'changed': True}
+_, acc_sparse = validate(chip.analog_model, dataloader, criterion, device)
+```
+
 ---
 
 ## Validation Results
@@ -194,6 +336,51 @@ The simulator was validated end-to-end with `main.py` on ResNet18 [13] trained o
 * **B-D** use the stuck-at fault rates measured on a 4 Mb HfO2 test chip [5], about 10.8% of all cells. Without fault tolerance, the network drops to chance level (10% for ten classes). With full-range mapping, a cell stuck at `G_max` or `G_min` shifts its weight by a sizeable fraction of the layer's weight range, and with two cells per weight about 20% of the weights are affected. Compensation corrects roughly half of the weights with a single stuck cell, but not the remaining ones nor pairs with both cells stuck. Studies of stuck-at fault tolerance therefore evaluate unmitigated networks at fault rates of 0.1-1% [9], and rely on fault-tolerant training, remapping or redundancy at chip-level fault rates [6, 10, 11].
 
 Rows A-D are reproduced by the corresponding commands in [Command Line](#command-line) with `--batch-size 250`. Rows E-F use `--n-levels 2 --cells-per-weight 8`, without and with `--apply-stuck-at --p-on 0.01 --p-off 0.002`.
+
+### Preference Inversion on Qwen2.5-0.5B-Instruct
+
+**Setup**: `llm_main.py eval` on Qwen2.5-0.5B-Instruct [23] with the first 100 pairs of UltraFeedback `test_prefs` [21, 22] (98 pairs after `--max-length 1024` drops two long prompts), 3 chips per `alpha`, the 168 projection matrices on 8-bit two-sided cells (`G` = 1-100 µS), `--low-memory`, float32 on an Apple M5 GPU (MPS), PyTorch 2.8.0, Transformers 4.57.6. Flip rates are means ± 95% confidence intervals over the chips; every row uses the same chips.
+
+| Configuration | Clean preference accuracy | Flip rate, `alpha` = 0 | `alpha` = 0.004 | `alpha` = 0.008 | RRAM preference accuracy, `alpha` = 0.008 |
+|---|---|---|---|---|---|
+| Instruction-tuned | 54.1% | 1.9% | 6.3 ± 1.2% | 16.4 ± 6.5% | 50.3% |
+| + 3-sigma clipping only | 40.8% | 0.0% | 5.8 ± 3.3% | 10.0 ± 2.8% | 43.2% |
+| HARD-DPO checkpoint trained with the original scripts of [16] (rank 8, `lora_alpha` 128; not distributed here), merged + 3-sigma clipping | 55.1% | 0.0% | 0.0 ± 0.0% | 0.0 ± 0.0% | 55.1% |
+| HARD-DPO, 100 steps on a laptop, merged + 3-sigma clipping | 54.1% | 0.0% | 0.0% | 1.3 ± 1.2% | 53.7% |
+
+* Programming error inverts the preference ordering of the instruction-tuned model: the flip rate grows from 1.9% (8-bit quantization alone) to 16% at `alpha` = 0.8%, as predicted by Theorem 1 of [16].
+* Clipping the weights to 3 sigma before mapping removes outliers that set the mapping scale, but without a trained adapter it costs 13 points of clean preference accuracy. The HARD-DPO update learns to compensate for the clipping [16]: the merged and clipped HARD-DPO checkpoint keeps (and slightly raises) the clean accuracy and shows no flip on any chip up to `alpha` = 0.8%, and its preference accuracy on the chip equals the digital one. The checkpoint is the PEFT LoRA state dict of the original HARD-DPO scripts, imported with `--peft-adapter --lora-alpha 128`.
+* The laptop run (100 steps, batch 2, `--max-length 512`, `--gradient-checkpointing`, 13 minutes) is a functional check of the trainer, not a reproduction of the paper's 1000-step training; all rows use only 98 pairs and 3 chips.
+
+**Released-script protocol** (`--legacy-eval`): `train_prefs[:500]` with a new subset of 50 pairs per chip, `G` = 50-350 µS without quantization, every `Linear` including the tied `lm_head`, and the Qwen system prompt; 5 chips at `alpha` = 0.008 (`--batch-size 1 --max-length 2048` to fit the laptop's memory).
+
+| Configuration | Clean preference accuracy | Flip rate, `alpha` = 0.008 | Reported in [16] |
+|---|---|---|---|
+| Instruction-tuned | 56.0% | 23.7 ± 13.3% | about 30-33% |
+| HARD-DPO checkpoint, adapter digital, base weights clipped at 3 sigma | 62.4% | 2.0 ± 2.7% | near 2% |
+
+The tool reproduces the published flip rates under the released protocol. The checkpoint's clean preference accuracy is 62.4% on this pool but 55.1% on the held-out `test_prefs`: the legacy pool lies inside the `train_prefs[:10000]` that HARD-DPO trains on, which is why the default evaluation uses `test_prefs`.
+
+Reproduce with `llm_main.py eval --pairs 100 --chips 3 --alphas 0 0.004 0.008 --max-length 1024 --low-memory`, adding `--clip-sigma 3` and `--experts` / `--peft-adapter ... --lora-alpha 128 --deploy merged` for the HARD-DPO rows; the laptop adapter comes from `llm_main.py train-hard-dpo --steps 100 --train-batch 2 --max-length 512 --max-prefs 2000 --gradient-checkpointing`. The released-script rows use `llm_main.py eval --legacy-eval --alphas 0.008 --chips 5 --batch-size 1 --max-length 2048 --low-memory`, with `--clip-sigma 3 --peft-adapter ... --lora-alpha 128 --deploy hybrid` for the checkpoint. One evaluation of 98 pairs takes about 1.5 minutes per chip on the M5.
+
+### Fault-Tolerant Experts on ResNet18
+
+**Setup**: `mof_main.py --steps 200 --chips 2` on the CIFAR-10 ResNet18 [13-15] above: programming-error, drift, stuck-at and read-noise experts (recipe `hat-fi-cnn`, rank 4 on all `Conv2d` layers, 200 steps each, batch 128), the stuck-at expert trained on the target chip (`--fault-seed 1`). Evaluation on the full test set with cumulative conditions: programming error `alpha_ind` = 0.03, relative drift 0.05, 4% stuck cells (2% at `G_max`, 2% at `G_min`) and read noise 0.02, 256-level cells, 2 chips per cell (mean accuracy; the chip-to-chip spread is below 1 point). The temperature expert and condition are skipped because no activation energy is assumed.
+
+| Condition | Unprotected | MoF-LoRA (prog + drift + saf merged) | Sparse-MoF | Experts selected by Sparse-MoF |
+|---|---|---|---|---|
+| Clean (ideal 8-bit chip) | 94.99% | 88.67% | 94.76% | prog |
+| + programming error | 93.64% | 88.31% | 93.53% | prog |
+| + drift | 91.71% | 87.69% | 91.47% | prog, drift |
+| + stuck-at faults | 10.01% | 89.94% | 89.57% | prog, drift, saf |
+| + read noise | 10.06% | 89.85% | 89.45% | prog, drift, saf, read |
+
+* The stuck-at faults drive the unprotected network to chance level; the stuck-at expert, trained on the chip's fault map, recovers it to about 90%, the "SAF cliff" and recovery reported in [18].
+* The static MoF-LoRA merge costs 6 points on a chip without stuck-at faults, because the drift clipping and the stuck-at correction are applied even where they are not needed. Telemetry-guided selection avoids this: the experts are switched on only when the online test detects their non-ideality, so Sparse-MoF tracks the unprotected model on healthy chips and MoF-LoRA on faulty ones [18].
+* At these mild soft-fault levels and 200 training steps, the drift and read-noise experts do not improve on the unprotected model (within 0.5 points), consistent with the moderate soft-fault gains in [18].
+* The online test reads back what was injected (with these chip settings it measures a stuck-cell rate of 4.0% and a relative drift of 0.050), and the selection matched the injected non-idealities on every chip.
+
+Reproduce with `python mof_main.py --dataset-path ./data --steps 200 --chips 2 --workers 2` (about 15 minutes on an Apple M5).
 
 ---
 
@@ -285,6 +472,83 @@ The non-ideality models implemented in this toolkit are phenomenological, design
     ```
 * **Basis**: This model is based on [1], which states, "To model this drift, we assume that the deviation in conductance, G\_drift, follows a Gaussian distribution". The same paper explicitly defines the term as `Relative Drift = σ / Gt` [1].
 
+### Read Noise
+
+* **Explanation**: Electron-conduction fluctuations make every read of a cell slightly different, so unlike programming error, read noise is drawn anew for every inference and does not change the stored state [18, 24].
+* **Model** (`set_read_noise(alpha_read)`): on every forward pass each cell is read as
+    ```
+    G_read = G + N(0, (a * G)^2),    a = alpha_read * thermal_factor(T)
+    ```
+    The simulator turns the per-cell noise into the exact per-weight standard deviation of the read weight (over polarities and bit-slices) when the chip is programmed, and samples it in a forward hook; stored conductances are restored after each pass.
+* **Basis**: State-proportional per-inference read noise as in HAT-FI [18], following the read-noise characteristics of ReRAM devices [24].
+
+### Temperature
+
+* **Explanation**: Thermally activated filament fluctuations increase conductance variability at higher temperature [18].
+* **Model** (`set_temperature(T, Ea_eV, T0=25)`): programming error applied afterwards and read noise are scaled by the Arrhenius factor
+    ```
+    alpha(T) = alpha(T0) * exp(Ea / kB * (1/T0 - 1/T))      (T, T0 in kelvin)
+    ```
+    The activation energy `Ea` has no default and is required for any `T != T0`, since it depends on the device stack and HAT-FI does not report a value [18]. Relaxation and drift are not scaled.
+* **Basis**: Arrhenius relation of HAT-FI [18, Eq. 3]; programming error that is reprogrammed at the operating temperature experiences the scaled noise.
+
+---
+
+## Alignment Robustness and Fault-Tolerant Experts
+
+### Preference Flip Rate
+
+* **Explanation**: Programming error perturbs the mapped projection weights and can erase the likelihood margin between a preferred response `y+` and a rejected response `y-`, so the deployed accelerator ranks `y-` above `y+` although the digital model does not: a preference inversion [16].
+* **Model**: with the masked per-token average log-likelihood of the response tokens (prompt and template tokens excluded),
+    ```
+    l(y | x)  = 1/N(x, y) * sum_t M_t(x, y) * log pi(y_t | x, y_<t)
+    m         = l(y+ | x) - l(y- | x)                      (digital model)
+    m_hw      = same on the simulated chip
+    flip rate = #{m > 0 and m_hw <= 0} / #{m > 0}           = P[m_hw <= 0 | m > 0]
+    CI95      = 1.96 * sigma_MC / sqrt(N_chips)
+    ```
+    The digital reference is the model as deployed (merged experts and deployment clipping, no quantization or noise). Preference accuracy is the fraction of pairs with a positive margin. Every chip uses the same seed at every `alpha` and for every model, so models are compared on the same chips. Pairs come from the held-out `test_prefs` split of UltraFeedback [21, 22]; the chat template's default system prompt is used. Theorem 1 of [16] predicts `P[flip] = Phi(-m / (alpha * C))`, so flips concentrate on pairs with small clean margins and grow with `alpha`.
+* **Mapped layers**: `q/k/v/o_proj` and `gate/up/down_proj`; attention scores, the KV cache, embeddings and `lm_head` stay in the digital path [16]. `--legacy-eval` reproduces the released evaluation scripts instead (see [How to Run](#llm-alignment-robustness-and-hard-dpo)).
+
+### HARD-DPO
+
+* **Explanation**: DPO [19] increases the clean margin but does not control its sensitivity to hardware perturbations. HARD-DPO optimizes the DPO objective under the noisy forward pass and adds a clean-to-noisy consistency term, with parameter-efficient LoRA [20] updates that are merged into the weights before mapping [16].
+* **Model**: for every adapted projection `W = W0 + (alpha_LoRA / r) B A`,
+    ```
+    W~     = clip(W * exp(eps), -3 std(W), +3 std(W)),   eps ~ N(0, sigma^2)        (sign-preserving)
+    Delta  = [l~(y+) - l~(y-)] - [l_ref(y+) - l_ref(y-)]                             (noisy policy, reference)
+    L      = -log sigmoid(beta * Delta)  +  lambda_KD * tau^2 * mean_t KL(p_clean,t || p_noisy,t)   (on y+)
+    ```
+    Defaults (paper and released script): `sigma` = 0.008, `beta` = 0.1, `lambda_KD` = 0.5, `tau` = 1, rank 8, `lora_alpha` 16, AdamW with lr 5e-5, batch 4, 1000 steps on `train_prefs[:10000]`. Chosen and rejected responses share one noise sample per step. The reference policy is the same model with its experts switched off, so no second copy of the LLM is held. `--noise-target base` perturbs only `W0` and keeps the LoRA update clean, as the released script does; `--noise simulator` injects the simulator-exact programming error instead of the log-normal surrogate.
+* **Deployment**: merged into the crossbar and clipped at 3 sigma (`--deploy merged --clip-sigma 3`, the paper's best setting), or kept digital (`--deploy hybrid`), optionally magnitude-pruned (`--prune`).
+
+### MoF-LoRA and Sparse-MoF Experts
+
+* **Explanation**: Different non-idealities need conflicting corrections, so one LoRA expert is trained per non-ideality. MoF-LoRA merges the programming-error, drift and stuck-at experts into the base weights at design time [17]. Sparse-MoF keeps all experts, including read-noise and temperature experts, as separate adapters and activates the relevant subset on the deployed chip from hardware telemetry, so the correction follows the device as it ages [18].
+* **Expert training** (`mof.train_experts`, AdamW lr 3e-4, weight decay 1e-4, cosine annealing [17]); each expert trains only its own factors:
+
+    | Expert | Builds on | Training perturbation |
+    |---|---|---|
+    | `prog` | `W0` | truncated Gaussian `TN(0, (alpha std(X))^2, +-3 sigma)`, on `W0 + dW` [18] or on `W0`, `A`, `B` separately [17] |
+    | `drift` | `clip(W0 + dW_prog, +-3 std)` | state-proportional `sigma = alpha * |W|` [18] (none in [17], Algorithm 1) and `R_drift = alpha_R * sum max(0, |W2| - 3 std(W2))^2` |
+    | `saf` | chain `W2`, masked | stuck-at map of the target chip from `fault_map()` (March-test equivalent); faulty weights frozen to the values they take on that chip, so the expert works around them |
+    | `read` | `W0` | `sigma = alpha * |W|`, resampled every step |
+    | `temp` | `W0` | truncated Gaussian with `alpha(T)` from the Arrhenius factor |
+
+    Recipes hold the published coefficients: `hat-fi-llm` (rank 64, `lora_alpha` 128; `alpha` = 0.06 / 0.03 / 0.03 / 0.06 for prog / drift / read / temp, `p_SAF` = 2%) and `hat-fi-cnn` (rank 4; 0.5 / 0.3 / 0.3 / 0.5, `p_SAF` = 15%) [18], and `mof-lora` (rank 32, scale 1/r, 5% programming noise) [17]. The strength `alpha_R` of `R_drift` is not reported in the papers (default 1.0). `saf_exact=True` recomputes the frozen values from the current weights on every step, so a differential pair with one stuck cell follows its healthy partner exactly as on the chip.
+* **Deployment modes**: `set_merge(model, True)` programs `W0` plus the active experts into the crossbar (MoF-LoRA, zero runtime overhead); `False` keeps `W0` on the crossbar and runs the active experts digitally (hybrid); `map_adapters=True` programs the expert factors into their own cells, where they see the same non-idealities (fully analog LoRA).
+* **Sparse-MoF selection** (`mof.SparseMoF`): `telemetry()` is the online test of the chip: the stuck-cell rate (March test), the relative drift since the last write-verify, the relative read noise from repeated reads of a fixed sample of cells, and the temperature sensor. The thresholds are those of HAT-FI [18]:
+
+    | Expert | Activated when |
+    |---|---|
+    | `prog` | always |
+    | `drift` | measured relative drift >= 0.010 |
+    | `saf` | measured stuck-cell rate >= 2% |
+    | `read` | measured relative read noise >= 0.003 |
+    | `temp` | temperature >= 35 C |
+
+    When the active set changes, the experts are re-merged and the chip is reprogrammed: the stuck-at map is kept and programming error is drawn anew (`reprogram_params`). Drift and stuck-at detections are latched, because reprogramming resets the measured drift but not its cause. An optional accuracy probe on a calibration set is the secondary trigger: if accuracy falls more than `max_drop` below the baseline, each optional expert is toggled and kept if the probe improves.
+
 ---
 
 
@@ -296,6 +560,36 @@ If you use PyRRAM-Sim in your research, we kindly ask that you cite the followin
   title   = {PyRRAM-Sim: A Toolkit for RRAM Non-Ideality Simulation},
   author  = {Ahmed, Soyed Tuhin},
   year    = {2025},
+}
+```
+
+If you use the alignment evaluation or HARD-DPO, please also cite [16]; for MoF-LoRA experts, [17]; for Sparse-MoF expert selection, read-noise and temperature experts, [18]:
+
+```bibtex
+@article{Ahmed2026HARDDPO,
+  title   = {{HARD-DPO}: Hardware-Aware Robust Direct Preference Optimization for {RRAM}-based {LLM} Accelerators},
+  author  = {Ahmed, Soyed Tuhin and Chakrabarty, Krishnendu},
+  journal = {IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems},
+  year    = {2026},
+}
+
+@article{Ahmed2026MoFLoRA,
+  title   = {{MoF-LoRA}: Mixture of Low-Rank Fault-Tolerant Experts for {RRAM}-Based In-Memory Computing},
+  author  = {Ahmed, Soyed Tuhin and Ortega, Eduardo and Xiao, Patrick and Feinberg, Ben and Bennett, Christopher H. and Marinella, Matthew J. and Chakrabarty, Krishnendu},
+  journal = {IEEE Journal on Emerging and Selected Topics in Circuits and Systems},
+  volume  = {16},
+  number  = {2},
+  pages   = {563--576},
+  year    = {2026},
+  doi     = {10.1109/JETCAS.2026.3655242},
+}
+
+@inproceedings{Sharma2026HATFI,
+  title     = {{HAT-FI}: Hardware-Aware Training for Fault-Tolerant {LLM} Inference on {RRAM}-Based Compute-in-Memory},
+  author    = {Sharma, Pragya and Ahmed, Soyed Tuhin and Firouzi, Farshad and Chakrabarty, Krishnendu},
+  booktitle = {IEEE VLSI Test Symposium (VTS)},
+  year      = {2026},
+  doi       = {10.1109/VTS69484.2026.11563304},
 }
 ```
 
@@ -331,3 +625,21 @@ If you use PyRRAM-Sim in your research, we kindly ask that you cite the followin
 [14] A. Krizhevsky, "Learning Multiple Layers of Features from Tiny Images," Technical Report, University of Toronto, 2009.
 
 [15] edadaltocg, "resnet18_cifar10," Hugging Face model repository, MIT License, https://huggingface.co/edadaltocg/resnet18_cifar10 (reported test accuracy 94.98%).
+
+[16] S. T. Ahmed and K. Chakrabarty, "HARD-DPO: Hardware-Aware Robust Direct Preference Optimization for RRAM-based LLM Accelerators," *IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems*, 2026. Code: https://github.com/SoyedTuhinAhmed/HARD_DPO.
+
+[17] S. T. Ahmed, E. Ortega, P. Xiao, B. Feinberg, C. H. Bennett, M. J. Marinella, and K. Chakrabarty, "MoF-LoRA: Mixture of Low-Rank Fault-Tolerant Experts for RRAM-Based In-Memory Computing," *IEEE Journal on Emerging and Selected Topics in Circuits and Systems*, vol. 16, no. 2, pp. 563-576, 2026, doi: 10.1109/JETCAS.2026.3655242.
+
+[18] P. Sharma, S. T. Ahmed, F. Firouzi, and K. Chakrabarty, "HAT-FI: Hardware-Aware Training for Fault-Tolerant LLM Inference on RRAM-Based Compute-in-Memory," *IEEE VLSI Test Symposium (VTS)*, 2026, doi: 10.1109/VTS69484.2026.11563304.
+
+[19] R. Rafailov, A. Sharma, E. Mitchell, S. Ermon, C. D. Manning, and C. Finn, "Direct Preference Optimization: Your Language Model is Secretly a Reward Model," *Advances in Neural Information Processing Systems (NeurIPS)*, vol. 36, 2023.
+
+[20] E. J. Hu, Y. Shen, P. Wallis, Z. Allen-Zhu, Y. Li, S. Wang, L. Wang, and W. Chen, "LoRA: Low-Rank Adaptation of Large Language Models," *International Conference on Learning Representations (ICLR)*, 2022.
+
+[21] G. Cui, L. Yuan, N. Ding, et al., "UltraFeedback: Boosting Language Models with Scaled AI Feedback," *International Conference on Machine Learning (ICML)*, 2024, arXiv:2310.01377.
+
+[22] L. Tunstall, E. Beeching, N. Lambert, et al., "Zephyr: Direct Distillation of LM Alignment," *arXiv preprint arXiv:2310.16944*, 2023 (binarized UltraFeedback, https://huggingface.co/datasets/HuggingFaceH4/ultrafeedback_binarized).
+
+[23] Qwen Team, "Qwen2.5 Technical Report," *arXiv preprint arXiv:2412.15115*, 2024.
+
+[24] K. Schnieders, C. Funck, et al., "Effect of Electron Conduction on the Read Noise Characteristics in ReRAM Devices," *APL Materials*, vol. 10, no. 10, 2022.
