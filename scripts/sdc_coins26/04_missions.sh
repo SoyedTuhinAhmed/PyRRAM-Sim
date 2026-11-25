@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Step 4: fly the simulated chips through the 12-month mission, for every arm of Figs. 2-8.
-# One job = one arm x one seed, run one per GPU (longest first); finished jobs are kept, so an
+# Step 4: fly the simulated chips through the 12-month mission, for every configuration of Figs. 2-8.
+# One job = one configuration x one seed, run one per GPU (longest first); finished jobs are kept, so an
 # interrupted run continues where it stopped.
 #
 #   bash scripts/sdc_coins26/04_missions.sh                    # default seed plan, ~17 GPU-hours
@@ -65,7 +65,7 @@ n_done=$(find "$RESULTS_DIR" -name '*.done' | wc -l | tr -d ' ')
 say "$n_done jobs finished in $RESULTS_DIR"
 if [[ "$failed" -gt 0 ]]; then
   grep FAILED "$run_log" >&2
-  echo "WARNING: $failed job(s) failed; see <arm>_seed<k>.log in $RESULTS_DIR." >&2
+  echo "WARNING: $failed job(s) failed; see <config>_seed<k>.log in $RESULTS_DIR." >&2
   echo "Rerunning this script retries only the jobs without a .done file." >&2
   exit 1
 fi

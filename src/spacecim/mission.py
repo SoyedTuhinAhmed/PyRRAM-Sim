@@ -163,7 +163,7 @@ def run_mission(digital: nn.Module, cfg: MissionConfig, seed: int, evaluate: Cal
     return records
 
 
-# ---------------------------------------------------------------------------- paper arms
+# ------------------------------------------------------------------- paper configurations
 
 DOSES = [0.1, 0.3, 1, 3, 10, 30, 60, 100, 200, 300, 1000, 3000]
 TEMPERATURES = [-100, -60, -40, -20, -10, 0, 10, 15, 20, 25, 30, 35, 40, 45, 55, 70, 85, 125]
@@ -184,7 +184,7 @@ _LADDER = {
 }
 
 
-def _arm(model, gdc=False, recal=(), seu=(1,), endpoint=(), no_seu=False, checkpoints=PAPER_CHECKPOINTS,
+def _config(model, gdc=False, recal=(), seu=(1,), endpoint=(), no_seu=False, checkpoints=PAPER_CHECKPOINTS,
          sweep=None, tech=None):
     tech = dict(tech or _PCM)
     return {"model": model, "gdc": gdc, "recal": tuple(recal), "seu_multipliers": tuple(seu),
@@ -192,46 +192,46 @@ def _arm(model, gdc=False, recal=(), seu=(1,), endpoint=(), no_seu=False, checkp
             "checkpoints": tuple(checkpoints), "sweep": sweep, **tech}
 
 
-# Arms of the COINS'26 case study; names follow the original experiment codes.
-ARMS = {
+# Configurations of the COINS'26 case study; names follow the original experiment codes.
+CONFIGS = {
     # Fig. 2: mitigation ladder over the 12-month mission (PCM)
-    "E1a": _arm("e0", seu=(), no_seu=True),
-    "E1b": _arm("e0", seu=(1, 10, 100)),
-    "E2": _arm("e2", endpoint=(10, 100)),
-    "E3": _arm("e2", gdc=True, endpoint=(10, 100)),
-    "E4": _arm("e2", gdc=True, recal=("layernorm", "head"), endpoint=(10, 100)),
+    "E1a": _config("e0", seu=(), no_seu=True),
+    "E1b": _config("e0", seu=(1, 10, 100)),
+    "E2": _config("e2", endpoint=(10, 100)),
+    "E3": _config("e2", gdc=True, endpoint=(10, 100)),
+    "E4": _config("e2", gdc=True, recal=("layernorm", "head"), endpoint=(10, 100)),
     # Fig. 3 (leave-one-out) and Sec. V-B (deployable head-only recalibration)
-    "E3_noLoRA": _arm("e0", gdc=True, endpoint=(10, 100)),
-    "E4_noLoRA": _arm("e0", gdc=True, recal=("layernorm", "head"), endpoint=(10, 100)),
-    "E4_head": _arm("e2", gdc=True, recal=("head",), endpoint=(10, 100)),
+    "E3_noLoRA": _config("e0", gdc=True, endpoint=(10, 100)),
+    "E4_noLoRA": _config("e0", gdc=True, recal=("layernorm", "head"), endpoint=(10, 100)),
+    "E4_head": _config("e2", gdc=True, recal=("head",), endpoint=(10, 100)),
 }
 # Fig. 5: technology ladder at 12 months (P = PCM, R = ReRAM single device,
 # RP = ReRAM differential pair, S = SONOS projected under the log retention law)
 for prefix, tech in (("P", _PCM), ("R", _RERAM), ("RP", _RERAM_DIFF), ("S", _SONOS)):
     for k, step in _LADDER.items():
-        ARMS[f"{prefix}{k}Y"] = _arm(step["model"], step.get("gdc", False), step.get("recal", ()),
+        CONFIGS[f"{prefix}{k}Y"] = _config(step["model"], step.get("gdc", False), step.get("recal", ()),
                                      checkpoints=TECH_CHECKPOINTS, tech=tech)
 # Fig. 7: total ionizing dose, PCM ladder, fresh (1 s) and after 12 months
 _TWO = (("1s", 1), ("12mo", 31536000))
 for k, step in _LADDER.items():
-    ARMS[f"D{k}"] = _arm(step["model"], step.get("gdc", False), step.get("recal", ()), checkpoints=_TWO,
+    CONFIGS[f"D{k}"] = _config(step["model"], step.get("gdc", False), step.get("recal", ()), checkpoints=_TWO,
                          sweep=_DOSE_SWEEP)
-    ARMS[f"T{k}"] = _arm(step["model"], step.get("gdc", False), step.get("recal", ()), checkpoints=_TWO,
+    CONFIGS[f"T{k}"] = _config(step["model"], step.get("gdc", False), step.get("recal", ()), checkpoints=_TWO,
                          sweep=_TEMP_SWEEP)
 # Fig. 6: technology x dose, freshly programmed (naive and fully mitigated)
 for name, tech in (("RPD", _RERAM_DIFF), ("SD", _SONOS), ("SX", _SONOS_SHIFT)):
-    ARMS[f"{name}1"] = _arm("e0", checkpoints=(("1s", 1),), sweep=_DOSE_SWEEP, tech=tech)
-    ARMS[f"{name}4"] = _arm("e2", True, ("layernorm", "head"), checkpoints=(("1s", 1),), sweep=_DOSE_SWEEP,
+    CONFIGS[f"{name}1"] = _config("e0", checkpoints=(("1s", 1),), sweep=_DOSE_SWEEP, tech=tech)
+    CONFIGS[f"{name}4"] = _config("e2", True, ("layernorm", "head"), checkpoints=(("1s", 1),), sweep=_DOSE_SWEEP,
                             tech=tech)
 
 
-def arm_missions(arm: str, sweep_values: Optional[Sequence[float]] = None) -> List[dict]:
+def config_missions(config: str, sweep_values: Optional[Sequence[float]] = None) -> List[dict]:
     """
-    Expands an arm into its missions: one per SEU multiplier (whole timeline) and per
+    Expands a configuration into its missions: one per SEU multiplier (whole timeline) and per
     endpoint multiplier (final checkpoint only), crossed with the environment sweep. Each
     entry carries a MissionConfig, the evaluated labels and the mission index.
     """
-    a = ARMS[arm]
+    a = CONFIGS[config]
     seu_plan = []
     if a["include_no_seu"]:
         seu_plan.append((0.0, False))

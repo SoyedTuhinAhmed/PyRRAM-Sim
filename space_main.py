@@ -4,7 +4,7 @@ Analog compute-in-memory for space data centers: the COINS'26 case study in PyRR
     build-cache   EuroSAT_MS GeoTIFFs -> array cache (needs rasterio, pyproj)
     finetune      E0: FP32 fine-tuning of Presto on EuroSAT
     lora          E2: noise-aware LoRA on an E0 checkpoint, merged for analog mapping
-    mission       run one or more paper arms (E1a ... E4, P/R/RP/S ladders, D/T sweeps, ...)
+    mission       run configurations of the paper (E1a ... E4, P/R/RP/S ladders, D/T sweeps, ...)
     summarize     mean +- std over seeds of mission results, next to the paper's values
     plot          accuracy vs mission time and vs dose / temperature
 """
@@ -28,13 +28,24 @@ PAPER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "sp
 T_ORDER = {t: i for i, t in enumerate(["digital", "1s", "1h", "1d", "1wk", "5d", "1mo", "3mo", "6mo", "12mo"])}
 
 
-def _key(arm, t, seu, env):
-    return arm, t, float(seu or 0.0), None if env is None else round(float(env), 4)
+def _key(config, t, seu, env):
+    return config, t, float(seu or 0.0), None if env is None else round(float(env), 4)
+
+
+def read_results(paths):
+    """Records of mission result files (JSONL). Files written by earlier versions name the
+    configuration in an "arm" field."""
+    for path in paths:
+        for line in open(path):
+            r = json.loads(line)
+            if "config" not in r and "arm" in r:
+                r["config"] = r.pop("arm")
+            yield r
 
 
 def load_paper(path=PAPER_FILE):
     rows = json.load(open(path))["rows"]
-    return {_key(r["arm"], r["t"], r["seu"], r["env"]): r for r in rows}
+    return {_key(r["config"], r["t"], r["seu"], r["env"]): r for r in rows}
 
 
 def _classifier():
@@ -115,19 +126,19 @@ def cmd_mission(a):
     out = open(a.out, "a")
     for seed in a.seeds:
         sources = {}
-        for arm in a.arms:
-            missions = M.arm_missions(arm, a.sweep_values)
+        for config in a.configs:
+            missions = M.config_missions(config, a.sweep_values)
             for spec in missions:
                 src = spec["model"]
                 if src not in sources:
                     path = _resolve(a.e0 if src == "e0" else a.e2, seed)
                     sources[src] = PC.load_classifier(path).to(device).eval()
                     ref = evaluate(sources[src])
-                    rec = {"arm": f"{src.upper()}_digital", "seed": seed, "t_label": "digital", **ref}
+                    rec = {"config": f"{src.upper()}_digital", "seed": seed, "t_label": "digital", **ref}
                     out.write(json.dumps(rec) + "\n")
                     out.flush()
                     print(f"seed {seed} {src} digital acc={ref['accuracy']:.4f} ({path})")
-                tag = f"{arm}" + (f"@{spec['seu_multiplier']:g}x" if spec["seu_multiplier"] != 1 else "")
+                tag = f"{config}" + (f"@{spec['seu_multiplier']:g}x" if spec["seu_multiplier"] != 1 else "")
                 if spec["env_value"] is not None:
                     tag += f" env={spec['env_value']:g}"
                 print(f"seed {seed} {tag}{' (endpoint)' if spec['endpoint_only'] else ''}")
@@ -135,7 +146,7 @@ def cmd_mission(a):
                 records = M.run_mission(sources[src], spec["cfg"], ms, evaluate, calib_batches, loss_on_batch,
                                         labels=spec["labels"])
                 for r in records:
-                    r.update({"arm": arm, "seed": seed, "seu_multiplier": spec["seu_multiplier"],
+                    r.update({"config": config, "seed": seed, "seu_multiplier": spec["seu_multiplier"],
                               "env_value": spec["env_value"], "endpoint_only": spec["endpoint_only"],
                               "mission_seed": ms})
                     out.write(json.dumps(r) + "\n")
@@ -151,41 +162,39 @@ def cmd_summarize(a):
     distribution give |z| < 2 for about 95% of the points."""
     paper = load_paper(a.paper) if a.paper != "none" else {}
     groups, digital = defaultdict(list), {}
-    for path in a.results:
-        for line in open(path):
-            r = json.loads(line)
-            if a.arms and r["arm"].split("_digital")[0] not in a.arms and r["arm"] not in a.arms:
-                continue
-            key = _key(r["arm"], r["t_label"], r.get("seu_multiplier"), r.get("env_value"))
-            if r["t_label"] == "digital":
-                # every mission job re-evaluates its digital model: count each seed once
-                digital.setdefault((key, r["seed"]), r["accuracy"])
-            else:
-                groups[key].append(r["accuracy"])
+    for r in read_results(a.results):
+        if a.configs and r["config"].split("_digital")[0] not in a.configs and r["config"] not in a.configs:
+            continue
+        key = _key(r["config"], r["t_label"], r.get("seu_multiplier"), r.get("env_value"))
+        if r["t_label"] == "digital":
+            # every mission job re-evaluates its digital model: count each seed once
+            digital.setdefault((key, r["seed"]), r["accuracy"])
+        else:
+            groups[key].append(r["accuracy"])
     for (key, _), acc in digital.items():
         groups[key].append(acc)
 
     rows = []
     for key, v in groups.items():
         p = paper.get(key)
-        row = {"arm": key[0], "t": key[1], "seu": key[2], "env": key[3], "n": len(v),
+        row = {"config": key[0], "t": key[1], "seu": key[2], "env": key[3], "n": len(v),
                "mean": float(np.mean(v)), "std": float(np.std(v))}
         if p is not None:
             se = max(p["std"], 0.005) * np.sqrt(1 / len(v) + 1 / p["n"])
             row.update(paper=p["mean"], paper_std=p["std"], paper_n=p["n"], z=(row["mean"] - p["mean"]) / se)
         rows.append(row)
-    rows.sort(key=lambda r: (not r["arm"].endswith("_digital"), r["arm"], r["seu"],
+    rows.sort(key=lambda r: (not r["config"].endswith("_digital"), r["config"], r["seu"],
                              -1e9 if r["env"] is None else r["env"], T_ORDER.get(r["t"], 99)))
 
     def label(r):
-        return r["arm"] + (f"@{r['seu']:g}x" if r["seu"] not in (0.0, 1.0) else "")
+        return r["config"] + (f"@{r['seu']:g}x" if r["seu"] not in (0.0, 1.0) else "")
 
-    print(f"{'arm':<16}{'t':>8}{'env':>8}{'n':>4}{'mean':>8}{'std':>8}{'paper':>8}{'p.std':>8}{'z':>7}")
+    print(f"{'config':<16}{'t':>8}{'env':>8}{'n':>4}{'mean':>8}{'std':>8}{'paper':>8}{'p.std':>8}{'z':>7}")
     for r in rows:
         env = "" if r["env"] is None else f"{r['env']:g}"
         ref = (f"{r['paper']:>8.4f}{r['paper_std']:>8.4f}{r['z']:>+7.2f}" if "paper" in r else "")
         print(f"{label(r):<16}{r['t']:>8}{env:>8}{r['n']:>4}{r['mean']:>8.4f}{r['std']:>8.4f}{ref}")
-    matched = [r for r in rows if "paper" in r and not r["arm"].endswith("_digital")]
+    matched = [r for r in rows if "paper" in r and not r["config"].endswith("_digital")]
     if matched:
         z = np.array([r["z"] for r in matched])
         d = np.array([r["mean"] - r["paper"] for r in matched])
@@ -200,7 +209,7 @@ def cmd_summarize(a):
                 print(f"  {label(r)} {r['t']}{env}: {r['mean']:.3f} (n={r['n']}) vs paper {r['paper']:.3f} "
                       f"+- {r['paper_std']:.3f}, z {r['z']:+.2f}")
     if a.csv:
-        cols = ["arm", "t", "seu", "env", "n", "mean", "std", "paper", "paper_std", "paper_n", "z"]
+        cols = ["config", "t", "seu", "env", "n", "mean", "std", "paper", "paper_std", "paper_n", "z"]
         with open(a.csv, "w") as f:
             f.write(",".join(cols) + "\n")
             for r in rows:
@@ -209,27 +218,25 @@ def cmd_summarize(a):
 
 
 def cmd_plot(a):
-    """Accuracy vs mission time (timeline arms) and vs dose / temperature (sweep arms)."""
+    """Accuracy vs mission time (Figs. 2, 5) and vs dose / temperature (Figs. 6-8)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     os.makedirs(a.out_dir, exist_ok=True)
     data = defaultdict(lambda: defaultdict(list))
-    for path in a.results:
-        for line in open(path):
-            r = json.loads(line)
-            if r["t_label"] == "digital" or r.get("endpoint_only"):
-                continue
-            series = (r["arm"], r.get("seu_multiplier", 1.0))
-            sweep = M.ARMS.get(r["arm"], {}).get("sweep")
-            if sweep is None:
-                tech = {"P": "pcm", "R": "reram-single", "RP": "reram-pair", "S": "sonos"}.get(r["arm"][:-2])
-                group = f"timeline_{tech}" if r["arm"].endswith("Y") and tech else "timeline_ladder"
-                x = r["t_seconds"]
-            else:
-                group = ("dose_" if sweep["key"].startswith("tid") else "temperature_") + r["t_label"]
-                x = r["env_value"]
-            data[(group, series)][x].append(r["accuracy"])
+    for r in read_results(a.results):
+        if r["t_label"] == "digital" or r.get("endpoint_only"):
+            continue
+        series = (r["config"], r.get("seu_multiplier", 1.0))
+        sweep = M.CONFIGS.get(r["config"], {}).get("sweep")
+        if sweep is None:
+            tech = {"P": "pcm", "R": "reram-single", "RP": "reram-pair", "S": "sonos"}.get(r["config"][:-2])
+            group = f"timeline_{tech}" if r["config"].endswith("Y") and tech else "timeline_ladder"
+            x = r["t_seconds"]
+        else:
+            group = ("dose_" if sweep["key"].startswith("tid") else "temperature_") + r["t_label"]
+            x = r["env_value"]
+        data[(group, series)][x].append(r["accuracy"])
     groups = defaultdict(list)
     for (group, series), pts in data.items():
         groups[group].append((series, pts))
@@ -237,11 +244,11 @@ def cmd_plot(a):
                "temperature": "operating temperature (C)"}
     for name, curves in groups.items():
         fig, ax = plt.subplots(figsize=(6, 3.6))
-        for (arm, mult), pts in sorted(curves, key=lambda c: c[0]):
+        for (config, mult), pts in sorted(curves, key=lambda c: c[0]):
             xs = sorted(pts)
             mean = np.array([np.mean(pts[x]) for x in xs])
             std = np.array([np.std(pts[x]) for x in xs])
-            lab = arm if mult in (0, 1, None) else f"{arm} {mult:g}x"
+            lab = config if mult in (0, 1, None) else f"{config} {mult:g}x"
             ax.plot(xs, mean, marker="o", ms=3, label=lab)
             ax.fill_between(xs, mean - std, mean + std, alpha=0.15)
         if not name.startswith("temperature"):
@@ -294,7 +301,7 @@ def main():
 
     m = sub.add_parser("mission")
     common(m)
-    m.add_argument("--arms", nargs="+", required=True, choices=sorted(M.ARMS))
+    m.add_argument("--configs", nargs="+", required=True, choices=sorted(M.CONFIGS))
     m.add_argument("--seeds", type=int, nargs="+", default=list(range(10)))
     m.add_argument("--e0", required=True, help="E0 checkpoint path, {seed} is substituted, globs allowed")
     m.add_argument("--e2", required=True, help="E2 (LoRA merged) checkpoint path, {seed} substituted")
@@ -308,7 +315,7 @@ def main():
 
     s = sub.add_parser("summarize", help="mean +- std per point, next to the paper's values")
     s.add_argument("results", nargs="+")
-    s.add_argument("--arms", nargs="+", default=None, help="only these arms")
+    s.add_argument("--configs", nargs="+", default=None, help="only these configurations, e.g. E4 P4Y")
     s.add_argument("--paper", default=PAPER_FILE, help="reference values ('none' to leave them out)")
     s.add_argument("--worst", type=int, default=10, help="list the points with the largest |z|")
     s.add_argument("--csv", default=None, help="also write the table as CSV")

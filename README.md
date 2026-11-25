@@ -69,10 +69,10 @@ pip install einops                  # only for the space case study (Presto); ra
 | `src/spacecim/devices.py` | Time-dependent PCM, ReRAM (CMO/HfOx) and SONOS device models and conductance mappings |
 | `src/spacecim/environment.py` | Single-event upsets, total ionizing dose, temperature |
 | `src/spacecim/tile.py` | Tiled analog layers with DAC/ADC periphery, weight and output noise, global drift compensation |
-| `src/spacecim/mission.py` | Mission timeline, recalibration, and the arms of the COINS'26 case study |
+| `src/spacecim/mission.py` | Mission timeline, recalibration, and the configurations of the COINS'26 case study (E1a ... SX4) |
 | `src/presto/` | Presto model [32] (MIT license), EuroSAT loader [33], fine-tuning and noise-aware LoRA |
 | `space_main.py` | Command line for the space case study: `build-cache`, `finetune`, `lora`, `mission`, `summarize`, `plot` |
-| `space_reproduce.py` | Runs the case-study arms over seeds on several GPUs |
+| `space_reproduce.py` | Runs the case-study configurations over seeds on several GPUs |
 | `scripts/sdc_coins26/` | Step-by-step shell scripts and tutorial reproducing the COINS'26 case study (download, cache, training, missions, comparison with the paper) |
 | `src/spacecim/paper_coins26.json` | The paper's 10-seed results for every point, used by `space_main.py summarize` |
 
@@ -204,12 +204,12 @@ python space_main.py build-cache --eurosat-root ./EuroSAT_MS --split-dir ./split
 python space_main.py finetune --cache-dir ./cache --presto-weights default_model.pt --seed 0 --out e0_seed0.pt
 python space_main.py lora --cache-dir ./cache --checkpoint e0_seed0.pt --seed 0 --out e2_seed0.pt
 
-# 3. Missions: any arm of the paper ({seed} is substituted in the checkpoint paths)
-python space_main.py mission --cache-dir ./cache --arms E1a E3_noLoRA E4_noLoRA --seeds 0 \
+# 3. Missions: any configuration of the paper ({seed} is substituted in the checkpoint paths)
+python space_main.py mission --cache-dir ./cache --configs E1a E3_noLoRA E4_noLoRA --seeds 0 \
     --e0 'e0_seed{seed}.pt' --e2 'e2_seed{seed}.pt' --compile --out results.jsonl
 python space_main.py summarize results.jsonl
 
-# All figures on 8 GPUs (one job = one arm x seed); fewer seeds for the sweeps
+# All figures on 8 GPUs (one job = one configuration x one seed); fewer seeds for the sweeps
 python space_reproduce.py --cache-dir ./cache --e0 'e0_seed{seed}.pt' --e2 'e2_seed{seed}.pt' \
     --figures fig2 fig3 fig5 fig6 fig7 fig8 --seeds 0 1 2 3 4 5 6 7 8 9 --figure-seeds fig6=0,1 fig7=0,1 fig8=0,1 \
     --gpus 0 1 2 3 4 5 6 7 --compile --out-dir results/
@@ -217,7 +217,7 @@ python space_main.py summarize results/*.jsonl
 python space_main.py plot results/*.jsonl --out-dir figures/   # needs matplotlib
 ```
 
-| Arms | Paper figure | Content |
+| Configurations | Paper figure | Content |
 |---|---|---|
 | `E1a`, `E1b`, `E2`, `E3`, `E4` | Fig. 2 | Mitigation ladder on PCM: naive (without / with upsets at 1, 10, 100x), + noise-aware LoRA, + drift compensation, + recalibration |
 | `E3_noLoRA`, `E4_noLoRA`, `E4_head` | Fig. 3, Sec. V-B | Leave-one-out of the adapter; head-only (deployable) recalibration |
@@ -470,7 +470,7 @@ Reproduce with `python mof_main.py --dataset-path ./data --steps 200 --chips 2 -
 
 Every point agrees within the sampling spread; the deterministic parts agree to floating-point precision. Runs use different random streams, so accuracies match in distribution, not draw for draw.
 
-**Reproduction.** All arms of Figs. 2-8 were rerun with PyRRAM-Sim on the case study's own fine-tuned (E0) and LoRA-merged (E2) Presto checkpoints. These are the same trained models, so the digital references are identical: 0.9571 FP32 and 0.9049 LoRA-merged, mean over 10 seeds. The run covered 188 mission jobs (arm x seed) on 8 RTX A5500 GPUs and took 2 h 10 min with `--compile`. Seeds: 10 for Figs. 2-4 (as in the paper), 5 for Fig. 5, and 2 for the dose and temperature sweeps of Figs. 6-8. Each cell reads **PyRRAM-Sim / paper**, the paper value being the mean of the paper's runs for the same seeds; accuracy is top-1 on the 5,400 EuroSAT test images.
+**Reproduction.** All configurations of Figs. 2-8 were rerun with PyRRAM-Sim on the case study's own fine-tuned (E0) and LoRA-merged (E2) Presto checkpoints. These are the same trained models, so the digital references are identical: 0.9571 FP32 and 0.9049 LoRA-merged, mean over 10 seeds. The run covered 188 mission jobs (configuration x seed) on 8 RTX A5500 GPUs and took 2 h 10 min with `--compile`. Seeds: 10 for Figs. 2-4 (as in the paper), 5 for Fig. 5, and 2 for the dose and temperature sweeps of Figs. 6-8. Each cell reads **PyRRAM-Sim / paper**, the paper value being the mean of the paper's runs for the same seeds; accuracy is top-1 on the 5,400 EuroSAT test images.
 
 *Fig. 2 and Fig. 3: mitigation ladder on PCM, 10 seeds*
 
@@ -544,7 +544,7 @@ Every point agrees within the sampling spread; the deterministic parts agree to 
 | Fully mitigated, fresh | 0.343 / 0.333 | 0.866 / 0.866 | 0.917 / 0.912 | 0.868 / 0.870 | 0.707 / 0.715 | 0.630 / 0.639 |
 | Fully mitigated, 12 months | 0.275 / 0.248 | 0.785 / 0.781 | 0.881 / 0.887 | 0.871 / 0.875 | 0.770 / 0.811 | 0.734 / 0.731 |
 
-Over all 532 points (every arm, checkpoint, upset rate, dose and temperature), the mean difference from the paper is +0.001 (no bias) and the median absolute difference is 0.007. 97% of the points lie within two standard errors of the paper's seed spread and 99% within three, as expected for two samples of the same distribution. The largest differences are at points where every chip sits at chance level (about 0.11) and the paper's spread is close to zero, for example the naive chip at 100x upsets after 3 months (0.134 vs 0.106), or in the 2-seed sweeps, where each value rests on two chips. No group of sweep points is biased: the mean difference is between -0.009 and +0.005 for each of the PCM, ReRAM, SONOS dose and temperature groups. The one sweep point beyond three standard errors with a well-defined spread is SONOS, fully mitigated, at 300 krad(Si) (0.865 vs 0.890). The chip-to-chip spreads match as well: over the 77 ten-seed points, our standard deviation is a median 0.99 times the paper's. The exception is drift compensation alone (`E3_noLoRA`) at 12 months, where the mean matches but the spread is wider (0.117 vs 0.042).
+Over all 532 points (every configuration, checkpoint, upset rate, dose and temperature), the mean difference from the paper is +0.001 (no bias) and the median absolute difference is 0.007. 97% of the points lie within two standard errors of the paper's seed spread and 99% within three, as expected for two samples of the same distribution. The largest differences are at points where every chip sits at chance level (about 0.11) and the paper's spread is close to zero, for example the naive chip at 100x upsets after 3 months (0.134 vs 0.106), or in the 2-seed sweeps, where each value rests on two chips. No group of sweep points is biased: the mean difference is between -0.009 and +0.005 for each of the PCM, ReRAM, SONOS dose and temperature groups. The one sweep point beyond three standard errors with a well-defined spread is SONOS, fully mitigated, at 300 krad(Si) (0.865 vs 0.890). The chip-to-chip spreads match as well: over the 77 ten-seed points, our standard deviation is a median 0.99 times the paper's. The exception is drift compensation alone (`E3_noLoRA`) at 12 months, where the mean matches but the spread is wider (0.117 vs 0.042).
 
 Training reproduces too. Run through `scripts/sdc_coins26/03_train.sh`, the E0 fine-tuning recreated the paper's checkpoints bit for bit for seeds 0 and 1 (test accuracy 0.9624 and 0.9500). The reimplemented noise-aware LoRA lands within the paper's spread (0.911 and 0.898 vs 0.916 and 0.880). Flying Figs. 2-3 on these models gives a mean difference of -0.007 from the paper over 92 points, with 93% within two standard errors.
 

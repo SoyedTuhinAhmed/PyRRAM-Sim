@@ -23,7 +23,7 @@ mkdir -p "$FIGURES_DIR" "$MPLCONFIGDIR"
 
 echo "Headline points (12 months; mean over seeds, then the paper's mean / std and z):"
 "$PY" -W ignore "$SPACE_MAIN" summarize "${results[@]}" --worst 0 \
-  --arms E0 E2 E1a E1b E3_noLoRA E3 E4_head E4 E4_noLoRA P4Y RP4Y R4Y S4Y \
+  --configs E0 E2 E1a E1b E3_noLoRA E3 E4_head E4 E4_noLoRA P4Y RP4Y R4Y S4Y \
   | awk 'NR == 1 || $2 == "12mo" || $2 == "digital"'
 echo
 sed -n '/points compared with the paper/,$p' "$RESULTS_DIR/summary.txt" | grep -v "^wrote"

@@ -13,7 +13,7 @@ with PyRRAM-Sim. A Presto remote-sensing transformer, fine-tuned on EuroSAT, is 
 | `02_build_cache.sh` | GeoTIFFs -> array cache (2.7 GB) | about a minute (CPU) |
 | `smoke_test.sh` | The whole pipeline on 300 images, as a check | 3 minutes |
 | `03_train.sh` | E0 (FP32 fine-tune) and E2 (noise-aware LoRA) for 10 seeds | about 1.5 h (35-50 min per seed) |
-| `04_missions.sh` | The mission arms of Figs. 2-8 (188 jobs) | 2 h 10 min (17 GPU-hours) |
+| `04_missions.sh` | Every configuration of Figs. 2-8 over the mission (188 jobs) | 2 h 10 min (17 GPU-hours) |
 | `04_missions.sh --full` | 10 seeds for every figure (380 jobs) | about 5.5 h (42 GPU-hours) |
 | `05_report.sh` | Comparison with the paper, figures | under a minute |
 | `run_all.sh` | Steps 1-5 in a row | |
@@ -99,9 +99,9 @@ bash scripts/sdc_coins26/04_missions.sh --full           # 10 seeds everywhere, 
 bash scripts/sdc_coins26/04_missions.sh --figures "fig2 fig3" --seeds 0,1,2
 ```
 
-Each job flies one arm with one seed: the chip is programmed at t = 0 and read at 1 s, 1 h, 1 day, 1 week, 1 month, 3, 6 and 12 months (or at 1 s and 12 months for the sweeps). At every checkpoint it is evaluated on the 5,400 test images. Jobs run one per GPU, the longest first. Results go to `sdc_work/results/<arm>_seed<k>.jsonl`, with a `.log` next to each and a `.done` marker once finished. Rerunning the script runs only the jobs without a `.done` marker. Follow the progress with `tail -f sdc_work/logs/missions_*.log`.
+Each job flies one configuration (for example `E4`: noise-aware LoRA + drift compensation + recalibration, on PCM) with one seed: the chip is programmed at t = 0 and read at 1 s, 1 h, 1 day, 1 week, 1 month, 3, 6 and 12 months (or at 1 s and 12 months for the sweeps). At every checkpoint it is evaluated on the 5,400 test images. Jobs run one per GPU, the longest first. Results go to `sdc_work/results/<config>_seed<k>.jsonl`, with a `.log` next to each and a `.done` marker once finished. Rerunning the script runs only the jobs without a `.done` marker. Follow the progress with `tail -f sdc_work/logs/missions_*.log`.
 
-| Figure | Arms | What is varied | Default seeds | GPU-min per seed |
+| Figure | Configurations | What is varied | Default seeds | GPU-min per seed |
 |---|---|---|---|---|
 | Fig. 2 | `E1a`, `E1b`, `E2`, `E3`, `E4` | The mitigation ladder on PCM: naive without / with upsets, + noise-aware LoRA, + global drift compensation, + recalibration | 10 | 26 |
 | Fig. 3 | `E3_noLoRA`, `E4_noLoRA`, `E4_head` | Without the adapter; recalibrating only the head | 10 | 16 |
@@ -111,7 +111,7 @@ Each job flies one arm with one seed: the chip is programmed at t = 0 and read a
 | Fig. 7 | `D1`-`D4` | The PCM ladder against dose, fresh and after 12 months | 2 | 17 (+`D1`, `D4`) |
 | Fig. 8 | `T1`-`T4` | Operating temperature -100 to 125 C, fresh and after 12 months | 2 | 64 |
 
-Suffixes: `1` naive, `2` + noise-aware LoRA, `3` + drift compensation, `4` + recalibration (fully mitigated). The device and environment models behind each arm are described in the main README, section "Space Environment and Mission Models", and defined in `src/spacecim/mission.py` (`ARMS`).
+Suffixes: `1` naive, `2` + noise-aware LoRA, `3` + drift compensation, `4` + recalibration (fully mitigated). The device and environment models behind each configuration are described in the main README, section "Space Environment and Mission Models", and defined in `src/spacecim/mission.py` (`CONFIGS`).
 
 ### 6. Compare with the paper
 
@@ -125,7 +125,7 @@ prints the headline points and writes
 * `sdc_work/figures/*.png`: accuracy against mission time (`timeline_ladder.png` for Fig. 2, `timeline_<technology>.png` for Fig. 5), dose (`dose_1s.png`, `dose_12mo.png`) and temperature (`temperature_1s.png`, `temperature_12mo.png`).
 
 ```
-arm                    t     env   n    mean     std   paper   p.std      z
+config                 t     env   n    mean     std   paper   p.std      z
 E0_digital       digital          10  0.9571  0.0041  0.9571  0.0041  -0.00
 E4                  12mo          10  0.8899  0.0126  0.8873  0.0133  +0.43
 E4@10x              12mo          10  0.8394  0.0363  0.8314  0.0275  +0.65
@@ -133,12 +133,12 @@ E4@10x              12mo          10  0.8394  0.0363  0.8314  0.0275  +0.65
 532 points compared with the paper: mean difference -0.0082, median |difference| 0.0098; |z| < 2 for 95%, |z| < 3 for 99%
 ```
 
-`mean` and `std` are over your seeds and `paper` / `p.std` over the paper's 10 seeds (the reference values ship in `src/spacecim/paper_coins26.json`). `z` is the difference divided by its standard error, `p.std * sqrt(1/n + 1/10)`. If your chips follow the same distribution as the paper's, about 95% of the points have |z| < 2 and nearly all have |z| < 3. `env` is the dose in krad(Si) or the temperature in C for the sweep arms, and `@10x` marks the upset-rate multiplier.
+`mean` and `std` are over your seeds and `paper` / `p.std` over the paper's 10 seeds (the reference values ship in `src/spacecim/paper_coins26.json`). `z` is the difference divided by its standard error, `p.std * sqrt(1/n + 1/10)`. If your chips follow the same distribution as the paper's, about 95% of the points have |z| < 2 and nearly all have |z| < 3. `env` is the dose in krad(Si) or the temperature in C for the sweep configurations, and `@10x` marks the upset-rate multiplier.
 
 You can also call the tools directly:
 
 ```bash
-python space_main.py summarize sdc_work/results/*.jsonl --arms E4 E4_noLoRA   # selected arms
+python space_main.py summarize sdc_work/results/*.jsonl --configs E4 E4_noLoRA   # selected configurations
 python space_main.py plot sdc_work/results/*.jsonl --out-dir figures
 ```
 
@@ -159,36 +159,36 @@ The reproduction in the main README (section "Space Data Center Case Study (COIN
 
 * **Same checkpoints, same seeds** (as there): mean difference +0.001, 97% of the 532 points within two standard errors.
 * **Your own trained models**: a full test of these scripts trained seeds 0 and 1 from scratch and flew Figs. 2-3. The E0 weights came out bit-identical to the paper's, and E2 within its spread. Digital accuracy was 0.956 and 0.905 (paper 0.957 and 0.905). Over the 92 mission points, the mean difference from the paper was -0.007, with 93% of points within two standard errors and 98% within three. Each trained model and each simulated chip is one draw, so with few seeds a single unusual draw moves a whole figure; compare with `z`, not by eye.
-* **One known difference**: with drift compensation alone (`E3_noLoRA`) at 12 months, the mean matches the paper (0.661 vs 0.669 over 10 seeds), but the chips spread more (std 0.117 vs 0.042). The spreads agree at 1 month and in every other arm (median ratio 0.99 over the 77 ten-seed points). Seeds 0 and 1 happen to be the two lowest chips of this arm (0.465 and 0.638), so a 2-seed run reads low there.
+* **One known difference**: with drift compensation alone (`E3_noLoRA`) at 12 months, the mean matches the paper (0.661 vs 0.669 over 10 seeds), but the chips spread more (std 0.117 vs 0.042). The spreads agree at 1 month and in every other configuration (median ratio 0.99 over the 77 ten-seed points). Seeds 0 and 1 happen to be the two lowest chips of this configuration (0.465 and 0.638), so a 2-seed run reads low there.
 * **Fewer seeds than the paper**: a 2-seed sweep point carries a standard error of about 0.8 times the paper's spread, so differences of 0.05-0.10 at single dose or temperature points are expected. Look for trends across neighbouring points instead.
 * **Points at chance level** (about 0.10-0.11, for example every naive chip after a day) have almost no spread in the paper. There a difference of 0.02 already gives a large |z|; it is not a discrepancy.
 
-## Running a single arm
+## Running a single configuration
 
 The scripts are thin wrappers around two commands, which you can use directly:
 
 ```bash
-# one arm, chosen seeds, into one file (appended)
-python space_main.py mission --cache-dir sdc_work/cache --arms E4 E4_noLoRA --seeds 0 1 \
+# one or more configurations, chosen seeds, into one file (appended)
+python space_main.py mission --cache-dir sdc_work/cache --configs E4 E4_noLoRA --seeds 0 1 \
     --e0 'sdc_work/checkpoints/e0_seed{seed}.pt' --e2 'sdc_work/checkpoints/e2_seed{seed}.pt' \
     --compile --out my_results.jsonl
 
 # a custom sweep: the PCM ladder at three doses only
-python space_main.py mission ... --arms D4 --sweep-values 10 100 1000 --out dose.jsonl
+python space_main.py mission ... --configs D4 --sweep-values 10 100 1000 --out dose.jsonl
 
 # quick look: a class-stratified subset of the test set
-python space_main.py mission ... --arms E1a --test-limit 540 --out quick.jsonl
+python space_main.py mission ... --configs E1a --test-limit 540 --out quick.jsonl
 ```
 
 Each line of a result file is one evaluation:
 
 ```json
 {"t_label": "12mo", "t_seconds": 31536000.0, "accuracy": 0.8957, "macro_f1": 0.8916, "n_test": 5400,
- "seu_hits": 274, "n_devices": 791552, "recal_n_params": 3850, "gdc_alpha_mean": 2.0307, "arm": "E4",
+ "seu_hits": 274, "n_devices": 791552, "recal_n_params": 3850, "gdc_alpha_mean": 2.0307, "config": "E4",
  "seed": 0, "seu_multiplier": 1.0, "env_value": null, "endpoint_only": false, "mission_seed": 0, ...}
 ```
 
-`seu_hits` counts the upsets accumulated since programming (out of `n_devices` conductances), `recal_n_params` is the number of parameters recalibration fits (LayerNorm + head), `gdc_alpha_mean` is the mean drift-compensation gain over the tiles, and `env_value` is the dose or temperature of the sweep arms. Lines with `"t_label": "digital"` hold the digital model's accuracy (arms `E0_digital`, `E2_digital`).
+`seu_hits` counts the upsets accumulated since programming (out of `n_devices` conductances), `recal_n_params` is the number of parameters recalibration fits (LayerNorm + head), `gdc_alpha_mean` is the mean drift-compensation gain over the tiles, and `env_value` is the dose or temperature of the sweep configurations. Lines with `"t_label": "digital"` hold the digital model's accuracy (names `E0_digital`, `E2_digital`).
 
 ## Settings
 
@@ -213,7 +213,7 @@ All settings are environment variables, with defaults in `config.sh`:
 
 * **`torch.compile` fails with an ImportError or "Permission denied"** on a `.so` file: the kernel cache sits on a file system mounted `noexec` (often `/tmp`). The scripts already put it under `sdc_work/.cache`; if that is `noexec` too, set `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR` to another folder, or run `04_missions.sh --no-compile` (about 2x slower).
 * **CUDA out of memory** in the missions: `EVAL_BATCH=16 bash scripts/sdc_coins26/04_missions.sh`. Accuracy does not depend on the batch size.
-* **A job failed**: its log is `sdc_work/results/<arm>_seed<k>.log`. Fix the cause and rerun `04_missions.sh`; only unfinished jobs run again.
+* **A job failed**: its log is `sdc_work/results/<config>_seed<k>.log`. Fix the cause and rerun `04_missions.sh`; only unfinished jobs run again.
 * **No checkpoint for seed k**: `04_missions.sh` checks that both checkpoints exist for every seed it will use. Train them with `03_train.sh --seeds k`, or limit the seeds with `--seeds`.
 * **The download fails**: fetch `EuroSATallBands.zip` (or `EuroSAT_MS.zip` from Zenodo) by hand and pass it as `EUROSAT_ZIP`. The cache builder accepts either archive's folder layout.
 * **The login shell is csh / tcsh**: run the scripts with `bash script.sh` as shown; they do not depend on your login shell.

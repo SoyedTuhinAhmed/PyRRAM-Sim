@@ -12,7 +12,7 @@ SDC_WORK="${SDC_WORK:-$REPO_ROOT/sdc_work}"           # everything the scripts w
 DATA_DIR="${DATA_DIR:-$SDC_WORK/data}"                # EuroSAT zip + tifs, split files, Presto weights
 CACHE_DIR="${CACHE_DIR:-$SDC_WORK/cache}"             # EuroSAT array cache (2.7 GB)
 CKPT_DIR="${CKPT_DIR:-$SDC_WORK/checkpoints}"         # e0_seed<k>.pt, e2_seed<k>.pt
-RESULTS_DIR="${RESULTS_DIR:-$SDC_WORK/results}"       # <arm>_seed<k>.jsonl / .log / .done
+RESULTS_DIR="${RESULTS_DIR:-$SDC_WORK/results}"       # <config>_seed<k>.jsonl / .log / .done
 FIGURES_DIR="${FIGURES_DIR:-$SDC_WORK/figures}"
 LOG_DIR="${LOG_DIR:-$SDC_WORK/logs}"
 
