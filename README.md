@@ -4,12 +4,15 @@ PyRRAM-Sim is a lightweight, PyTorch-based simulation tool designed for research
 
 This toolkit simulates the sequential, cumulative effects of permanent stuck-at faults, programming errors, short-term conductance relaxation, long-term, state-proportional conductance drift, per-inference read noise and temperature. The models are based on phenomena described in leading academic research to ensure hardware-accurate simulation.
 
+It reproduces analog compute-in-memory over a twelve-month orbital mission for space data centers: time-dependent PCM, ReRAM and SONOS device models, single-event upsets, total ionizing dose and temperature, an aihwkit-style tile periphery, and the mitigations of the COINS'26 case study [25].
+
 It also evaluates and hardens instruction-tuned LLMs: the preference-inversion (flip) rate of aligned models under RRAM non-idealities and hardware-aware DPO (HARD-DPO) [16], and mixtures of fault-tolerant LoRA experts, merged at design time (MoF-LoRA) [17] or kept as separate adapters with telemetry-guided selection (Sparse-MoF) [18].
 
 ---
 
 ## What's New
 
+* **Space data centers: analog CiM in orbit** (`src/spacecim/`, `space_main.py`, `space_reproduce.py`): the compute-in-memory case study of the COINS'26 Space Data Centers paper [25], natively in PyRRAM-Sim. A Presto remote-sensing transformer [32] on EuroSAT [33] runs on PCM, ReRAM (single device or differential pair) or SONOS crossbars through 1 s ... 12 months of drift, read noise, single-event upsets, total ionizing dose and temperature, with noise-aware LoRA, global drift compensation and on-orbit recalibration. The device models and the tile periphery are checked against IBM aihwkit 1.1.0, the simulator the paper used (see [Validation Results](#space-data-center-case-study-coins26)).
 * **Alignment robustness of LLMs** (`src/alignment.py`, `llm_main.py eval`): preference accuracy and preference flip rate of instruction-tuned LLMs on UltraFeedback [21, 22] under RRAM non-idealities, with Monte-Carlo chips and 95% confidence intervals [16]. Only the static projections (q/k/v/o, gate/up/down) are mapped to RRAM; tied embeddings and `lm_head` stay digital.
 * **HARD-DPO** (`llm_main.py train-hard-dpo`): hardware-aware DPO [19] with LoRA [20], log-normal programming-noise injection, clean-noisy KL consistency and 3-sigma clipping [16]. Existing PEFT checkpoints of HARD-DPO load directly.
 * **Fault-tolerant LoRA experts** (`src/lora.py`, `src/mof.py`): programming-error, drift and stuck-at experts [17], plus read-noise and temperature experts [18], for `Linear` and `Conv2d` layers. Experts stay separate: any subset can run digitally next to the crossbar (hybrid), be merged into the programmed weights, or be programmed into their own cells.
@@ -36,6 +39,7 @@ It also evaluates and hardens instruction-tuned LLMs: the preference-inversion (
 * **Multi-Level and Bit-Sliced Cells**: Any number of levels per cell, and weights bit-sliced across several cells.
 * **LLM Alignment Evaluation**: Preference flip rate of instruction-tuned LLMs on simulated RRAM chips, and HARD-DPO training.
 * **Fault-Tolerant Experts**: MoF-LoRA and Sparse-MoF experts for programming error, drift, stuck-at faults, read noise and temperature, with telemetry-guided selection.
+* **Space Missions**: Time-dependent PCM / ReRAM / SONOS crossbars with upsets, dose and temperature, drift compensation and recalibration over an orbital mission.
 * **PyTorch Integration**: Seamlessly integrates with existing PyTorch models (including Hugging Face Transformers) and validation pipelines.
 
 ---
@@ -47,6 +51,7 @@ The toolkit is contained within the `PyRRAMSimulator` class in `src/`. Simply ad
 ```bash
 pip install torch torchvision
 pip install transformers datasets   # only for the LLM features (alignment.py, llm_main.py)
+pip install einops                  # only for the space case study (Presto); rasterio pyproj to build the EuroSAT cache
 ```
 
 | File | Contents |
@@ -61,6 +66,15 @@ pip install transformers datasets   # only for the LLM features (alignment.py, l
 | `main.py` | Command-line evaluation of a CIFAR-10-trained ResNet18 |
 | `llm_main.py` | Command line for LLMs: `eval`, `train-hard-dpo`, `train-experts` |
 | `mof_main.py` | Fault-tolerant experts on CIFAR-10 ResNet18: unprotected vs. MoF-LoRA vs. Sparse-MoF |
+| `src/spacecim/devices.py` | Time-dependent PCM, ReRAM (CMO/HfOx) and SONOS device models and conductance mappings |
+| `src/spacecim/environment.py` | Single-event upsets, total ionizing dose, temperature |
+| `src/spacecim/tile.py` | Tiled analog layers with DAC/ADC periphery, weight and output noise, global drift compensation |
+| `src/spacecim/mission.py` | Mission timeline, recalibration, and the arms of the COINS'26 case study |
+| `src/presto/` | Presto model [32] (MIT license), EuroSAT loader [33], fine-tuning and noise-aware LoRA |
+| `space_main.py` | Command line for the space case study: `build-cache`, `finetune`, `lora`, `mission`, `summarize`, `plot` |
+| `space_reproduce.py` | Runs the case-study arms over seeds on several GPUs |
+| `scripts/sdc_coins26/` | Step-by-step shell scripts and tutorial reproducing the COINS'26 case study (download, cache, training, missions, comparison with the paper) |
+| `src/spacecim/paper_coins26.json` | The paper's 10-seed results for every point, used by `space_main.py summarize` |
 
 ---
 
@@ -177,6 +191,43 @@ python mof_main.py --dataset-path ./data --load-experts resnet18_experts.pt --p-
 ```
 
 `--temperature`, `--ea` and `--train-temperature` are needed only for the temperature expert and condition; without them those are skipped. The chip defaults are `--prog-alpha 0.03`, `--drift 0.05`, `--p-saf 0.04` (half stuck-on, half stuck-off, `--fault-seed 1`) and `--read-alpha 0.02`.
+
+### Space Data Centers: Analog CiM Over an Orbital Mission
+
+The case study of [25]: Presto [32] fine-tuned on EuroSAT multispectral [33] (official splits [34]), mapped onto analog crossbars and flown for twelve months. Data and weights: the EuroSAT_MS archive (`https://hf.co/datasets/torchgeo/eurosat/resolve/main/EuroSATallBands.zip` or Zenodo record 7711810), the split files `eurosat-{train,val,test}.txt` from the same Hugging Face dataset, and Presto's `default_model.pt` from `github.com/nasaharvest/presto` (`data/`). The shell scripts in [`scripts/sdc_coins26/`](scripts/sdc_coins26/README.md) do all of this step by step (tutorial included); the commands underneath are:
+
+```bash
+# 1. EuroSAT GeoTIFFs -> array cache (once; needs rasterio, pyproj)
+python space_main.py build-cache --eurosat-root ./EuroSAT_MS --split-dir ./splits --cache-dir ./cache
+
+# 2. Design time, per seed: FP32 fine-tune (E0), then noise-aware LoRA merged into the weights (E2)
+python space_main.py finetune --cache-dir ./cache --presto-weights default_model.pt --seed 0 --out e0_seed0.pt
+python space_main.py lora --cache-dir ./cache --checkpoint e0_seed0.pt --seed 0 --out e2_seed0.pt
+
+# 3. Missions: any arm of the paper ({seed} is substituted in the checkpoint paths)
+python space_main.py mission --cache-dir ./cache --arms E1a E3_noLoRA E4_noLoRA --seeds 0 \
+    --e0 'e0_seed{seed}.pt' --e2 'e2_seed{seed}.pt' --compile --out results.jsonl
+python space_main.py summarize results.jsonl
+
+# All figures on 8 GPUs (one job = one arm x seed); fewer seeds for the sweeps
+python space_reproduce.py --cache-dir ./cache --e0 'e0_seed{seed}.pt' --e2 'e2_seed{seed}.pt' \
+    --figures fig2 fig3 fig5 fig6 fig7 fig8 --seeds 0 1 2 3 4 5 6 7 8 9 --figure-seeds fig6=0,1 fig7=0,1 fig8=0,1 \
+    --gpus 0 1 2 3 4 5 6 7 --compile --out-dir results/
+python space_main.py summarize results/*.jsonl
+python space_main.py plot results/*.jsonl --out-dir figures/   # needs matplotlib
+```
+
+| Arms | Paper figure | Content |
+|---|---|---|
+| `E1a`, `E1b`, `E2`, `E3`, `E4` | Fig. 2 | Mitigation ladder on PCM: naive (without / with upsets at 1, 10, 100x), + noise-aware LoRA, + drift compensation, + recalibration |
+| `E3_noLoRA`, `E4_noLoRA`, `E4_head` | Fig. 3, Sec. V-B | Leave-one-out of the adapter; head-only (deployable) recalibration |
+| `E1b`, `E4` (10x, 100x endpoints) | Fig. 4 | Accuracy at 12 months against the upset rate |
+| `P1Y`...`P4Y`, `R*Y`, `RP*Y`, `S*Y` | Fig. 5 | The ladder on PCM, ReRAM single device, ReRAM differential pair, SONOS |
+| `D1`, `D4`, `RPD*`, `SD*`, `SX*` | Fig. 6 | Total ionizing dose per technology; `SX`: SONOS with the charge-loss channel |
+| `D1`...`D4` | Fig. 7 | Dose sweep 0.1-3000 krad(Si), freshly programmed and after 12 months |
+| `T1`...`T4` | Fig. 8 | Operating temperature -100 to 125 C, freshly programmed and after 12 months |
+
+`--compile` fuses the tile MVM with `torch.compile` (about 2x faster on a GPU); if `/tmp` is mounted `noexec`, point `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR` to a writable, executable folder. `--test-limit` evaluates on a class-stratified subset for quick checks. Checkpoints of the original case-study code (`best.pt`, `merged.pt`) load directly.
 
 ### Python API
 
@@ -313,6 +364,24 @@ print(ctl.step())   # {'telemetry': {...}, 'active': ['prog', 'drift', 'saf'], '
 _, acc_sparse = validate(chip.analog_model, dataloader, criterion, device)
 ```
 
+A twelve-month mission of any model on analog crossbars (every `nn.Linear` except the head is mapped; the device is PCM by default):
+
+```python
+from spacecim import mission as M
+
+cfg = M.MissionConfig(device="reram_cmo_diff", device_kwargs={"g_max": 25.0, "g_min": 9.0},
+                      seu_lambda=1e-6,                      # upsets / device / day
+                      tid={"enabled": True, "dose_rate_krad_per_year": 1.0, "k_tid": 0.05},
+                      thermal={"enabled": True, "T_op_C": 70.0},
+                      drift_compensation=True, recalibrate=("layernorm", "head"))
+evaluate = lambda m: {"accuracy": validate(m, dataloader, criterion, device)[1] / 100}
+records = M.run_mission(my_model, cfg, seed=0, evaluate=evaluate,
+                        calib_batches=lambda gen: calib_loader,          # labelled calibration batches
+                        loss_on_batch=lambda m, b: criterion(m(b[0].to(device)), b[1].to(device)))
+for r in records:
+    print(r["t_label"], r["accuracy"], r["seu_hits"])       # 1s ... 12mo
+```
+
 ---
 
 ## Validation Results
@@ -381,6 +450,128 @@ Reproduce with `llm_main.py eval --pairs 100 --chips 3 --alphas 0 0.004 0.008 --
 * The online test reads back what was injected (with these chip settings it measures a stuck-cell rate of 4.0% and a relative drift of 0.050), and the selection matched the injected non-idealities on every chip.
 
 Reproduce with `python mof_main.py --dataset-path ./data --steps 200 --chips 2 --workers 2` (about 15 minutes on an Apple M5).
+
+### Space Data Center Case Study (COINS'26)
+
+**Equivalence with aihwkit.** The case study of [25] was run with IBM aihwkit 1.1.0 [27]. The PyRRAM-Sim port was compared against that pipeline, built from the original case-study code and configuration, on the same weights (256 x 256 tiles, 4 programming draws per point):
+
+| Check | PyRRAM-Sim | aihwkit 1.1.0 |
+|---|---|---|
+| Tile forward, all noise off (DAC, ADC, ABS_MAX, weight scaling) | relative error 8e-8 | reference |
+| 600 x 300 layer split into 6 tiles | relative error 1e-7 | reference |
+| PCM weight gain at 1 h / 5 d / 12 months | 0.770 / 0.611 / 0.496 | 0.771 / 0.611 / 0.497 |
+| PCM residual weight error at 12 months (std) | 0.0267 | 0.0268 |
+| ReRAM single device, residual std at 12 months | 0.144 | 0.144 |
+| ReRAM differential pair, gain / residual std at 12 months | 0.830 / 0.076 | 0.830 / 0.076 |
+| SONOS (log-law projection), gain at 12 months | 0.887 | 0.887 |
+| Drift-compensation gain alpha at 12 months, PCM / ReRAM pair | 2.028 / 1.571 | 2.028 / 1.576 |
+| Thermal activation (-40, 85, 125 C), TID charge loss (3 modes) | identical | reference |
+| Upsets in 12 months at 1e-4 / device / day | 4,865 | Poisson mean 4,784 |
+
+Every point agrees within the sampling spread; the deterministic parts agree to floating-point precision. Runs use different random streams, so accuracies match in distribution, not draw for draw.
+
+**Reproduction.** All arms of Figs. 2-8 were rerun with PyRRAM-Sim on the case study's own fine-tuned (E0) and LoRA-merged (E2) Presto checkpoints. These are the same trained models, so the digital references are identical: 0.9571 FP32 and 0.9049 LoRA-merged, mean over 10 seeds. The run covered 188 mission jobs (arm x seed) on 8 RTX A5500 GPUs and took 2 h 10 min with `--compile`. Seeds: 10 for Figs. 2-4 (as in the paper), 5 for Fig. 5, and 2 for the dose and temperature sweeps of Figs. 6-8. Each cell reads **PyRRAM-Sim / paper**, the paper value being the mean of the paper's runs for the same seeds; accuracy is top-1 on the 5,400 EuroSAT test images.
+
+*Fig. 2 and Fig. 3: mitigation ladder on PCM, 10 seeds*
+
+| Configuration | 1 s | 1 h | 1 week | 1 month | 12 months |
+|---|---|---|---|---|---|
+| Baseline, no upsets | 0.865 / 0.868 | 0.273 / 0.236 | 0.145 / 0.127 | 0.134 / 0.122 | 0.123 / 0.118 |
+| Baseline | 0.865 / 0.868 | 0.273 / 0.236 | 0.145 / 0.129 | 0.133 / 0.124 | 0.117 / 0.108 |
+| + noise-aware LoRA | 0.864 / 0.868 | 0.298 / 0.282 | 0.141 / 0.136 | 0.133 / 0.129 | 0.121 / 0.125 |
+| + drift compensation | 0.869 / 0.869 | 0.866 / 0.853 | 0.822 / 0.838 | 0.829 / 0.820 | 0.781 / 0.776 |
+| + recalibration (fully mitigated) | 0.918 / 0.917 | 0.913 / 0.912 | 0.904 / 0.903 | 0.900 / 0.901 | 0.890 / 0.887 |
+| Drift compensation only | 0.875 / 0.873 | 0.841 / 0.834 | 0.774 / 0.793 | 0.734 / 0.754 | 0.661 / 0.669 |
+| Drift compensation + recalibration (best) | 0.941 / 0.941 | 0.935 / 0.935 | 0.921 / 0.922 | 0.915 / 0.914 | 0.900 / 0.900 |
+| Fully mitigated, head-only recalibration | 0.900 / 0.899 | 0.898 / 0.892 | 0.887 / 0.886 | 0.884 / 0.883 | 0.868 / 0.867 |
+
+*Fig. 4: accuracy at 12 months against the upset rate (lambda = 1e-6 per device per day), 10 seeds*
+
+| 12 months, upset rate | 1 lambda | 10 lambda | 100 lambda |
+|---|---|---|---|
+| Baseline | 0.117 / 0.108 | 0.127 / 0.116 | 0.099 / 0.102 |
+| LoRA + drift compensation | 0.781 / 0.776 | 0.592 / 0.519 | 0.128 / 0.111 |
+| Drift compensation only | 0.661 / 0.669 | 0.406 / 0.391 | 0.126 / 0.104 |
+| Fully mitigated | 0.890 / 0.887 | 0.839 / 0.831 | 0.462 / 0.441 |
+| Drift compensation + recalibration | 0.900 / 0.900 | 0.827 / 0.816 | 0.409 / 0.397 |
+| Head-only recalibration | 0.868 / 0.867 | 0.793 / 0.777 | 0.409 / 0.390 |
+
+*Fig. 5: the ladder on each technology at 12 months, 5 seeds*
+
+| 12 months | Naive | + LoRA | + drift compensation | + recalibration |
+|---|---|---|---|---|
+| PCM | 0.108 / 0.119 | 0.126 / 0.129 | 0.749 / 0.780 | 0.889 / 0.888 |
+| ReRAM, single device | 0.125 / 0.133 | 0.165 / 0.132 | 0.193 / 0.148 | 0.562 / 0.602 |
+| ReRAM, differential pair | 0.125 / 0.114 | 0.151 / 0.141 | 0.397 / 0.399 | 0.822 / 0.830 |
+| SONOS (log-law projection) | 0.637 / 0.648 | 0.789 / 0.805 | 0.821 / 0.827 | 0.910 / 0.909 |
+
+*Fig. 6: total ionizing dose per technology, freshly programmed, 2 seeds*
+
+| Freshly programmed (1 s), dose krad(Si) | 1 | 10 | 30 | 100 | 300 |
+|---|---|---|---|---|---|
+| PCM, naive | 0.887 / 0.881 | 0.814 / 0.865 | 0.723 / 0.732 | 0.440 / 0.489 | 0.205 / 0.223 |
+| PCM, fully mitigated | 0.910 / 0.915 | 0.912 / 0.906 | 0.902 / 0.901 | 0.853 / 0.853 | 0.732 / 0.721 |
+| ReRAM pair, naive | 0.884 / 0.874 | 0.886 / 0.882 | 0.862 / 0.807 | 0.696 / 0.794 | 0.362 / 0.497 |
+| ReRAM pair, fully mitigated | 0.913 / 0.919 | 0.918 / 0.917 | 0.913 / 0.916 | 0.904 / 0.895 | 0.799 / 0.803 |
+| SONOS, naive | 0.913 / 0.910 | 0.927 / 0.930 | 0.911 / 0.925 | 0.835 / 0.863 | 0.675 / 0.630 |
+| SONOS, fully mitigated | 0.921 / 0.918 | 0.923 / 0.924 | 0.919 / 0.920 | 0.915 / 0.914 | 0.865 / 0.890 |
+| SONOS + charge loss, naive | 0.917 / 0.905 | 0.109 / 0.110 | 0.109 / 0.109 | 0.103 / 0.103 | 0.103 / 0.103 |
+| SONOS + charge loss, fully mitigated | 0.923 / 0.922 | 0.806 / 0.804 | 0.238 / 0.256 | 0.104 / 0.105 | 0.104 / 0.104 |
+
+*Fig. 7: PCM dose sweep, freshly programmed and after 12 months, 2 seeds*
+
+| PCM, dose krad(Si) | 1 | 10 | 30 | 100 | 300 |
+|---|---|---|---|---|---|
+| Naive, fresh | 0.887 / 0.881 | 0.814 / 0.865 | 0.723 / 0.732 | 0.440 / 0.489 | 0.205 / 0.223 |
+| Naive, 12 months | 0.109 / 0.109 | 0.109 / 0.109 | 0.159 / 0.109 | 0.109 / 0.160 | 0.104 / 0.202 |
+| + LoRA, fresh | 0.876 / 0.865 | 0.841 / 0.846 | 0.780 / 0.795 | 0.587 / 0.624 | 0.240 / 0.249 |
+| + LoRA, 12 months | 0.109 / 0.109 | 0.109 / 0.109 | 0.109 / 0.109 | 0.109 / 0.109 | 0.171 / 0.158 |
+| + drift compensation, fresh | 0.867 / 0.866 | 0.838 / 0.845 | 0.825 / 0.786 | 0.684 / 0.614 | 0.146 / 0.230 |
+| + drift compensation, 12 months | 0.715 / 0.758 | 0.742 / 0.695 | 0.600 / 0.718 | 0.423 / 0.414 | 0.325 / 0.272 |
+| Fully mitigated, fresh | 0.910 / 0.915 | 0.912 / 0.906 | 0.902 / 0.901 | 0.853 / 0.853 | 0.732 / 0.721 |
+| Fully mitigated, 12 months | 0.878 / 0.882 | 0.879 / 0.870 | 0.860 / 0.844 | 0.797 / 0.790 | 0.661 / 0.676 |
+
+*Fig. 8: PCM operating temperature, freshly programmed and after 12 months, 2 seeds*
+
+| PCM, operating temperature | -40 C | 0 C | 25 C | 55 C | 85 C | 125 C |
+|---|---|---|---|---|---|---|
+| Naive, fresh | 0.109 / 0.109 | 0.109 / 0.109 | 0.812 / 0.852 | 0.185 / 0.190 | 0.163 / 0.170 | 0.111 / 0.130 |
+| Naive, 12 months | 0.109 / 0.109 | 0.109 / 0.109 | 0.109 / 0.109 | 0.462 / 0.370 | 0.160 / 0.156 | 0.143 / 0.146 |
+| + LoRA, fresh | 0.109 / 0.109 | 0.109 / 0.109 | 0.842 / 0.821 | 0.280 / 0.274 | 0.156 / 0.153 | 0.111 / 0.114 |
+| + LoRA, 12 months | 0.109 / 0.109 | 0.109 / 0.109 | 0.109 / 0.109 | 0.536 / 0.476 | 0.280 / 0.263 | 0.193 / 0.173 |
+| + drift compensation, fresh | 0.112 / 0.106 | 0.491 / 0.641 | 0.843 / 0.821 | 0.635 / 0.621 | 0.308 / 0.334 | 0.191 / 0.197 |
+| + drift compensation, 12 months | 0.096 / 0.092 | 0.289 / 0.302 | 0.816 / 0.718 | 0.618 / 0.593 | 0.503 / 0.467 | 0.382 / 0.401 |
+| Fully mitigated, fresh | 0.343 / 0.333 | 0.866 / 0.866 | 0.917 / 0.912 | 0.868 / 0.870 | 0.707 / 0.715 | 0.630 / 0.639 |
+| Fully mitigated, 12 months | 0.275 / 0.248 | 0.785 / 0.781 | 0.881 / 0.887 | 0.871 / 0.875 | 0.770 / 0.811 | 0.734 / 0.731 |
+
+Over all 532 points (every arm, checkpoint, upset rate, dose and temperature), the mean difference from the paper is +0.001 (no bias) and the median absolute difference is 0.007. 97% of the points lie within two standard errors of the paper's seed spread and 99% within three, as expected for two samples of the same distribution. The largest differences are at points where every chip sits at chance level (about 0.11) and the paper's spread is close to zero, for example the naive chip at 100x upsets after 3 months (0.134 vs 0.106), or in the 2-seed sweeps, where each value rests on two chips. No group of sweep points is biased: the mean difference is between -0.009 and +0.005 for each of the PCM, ReRAM, SONOS dose and temperature groups. The one sweep point beyond three standard errors with a well-defined spread is SONOS, fully mitigated, at 300 krad(Si) (0.865 vs 0.890). The chip-to-chip spreads match as well: over the 77 ten-seed points, our standard deviation is a median 0.99 times the paper's. The exception is drift compensation alone (`E3_noLoRA`) at 12 months, where the mean matches but the spread is wider (0.117 vs 0.042).
+
+Training reproduces too. Run through `scripts/sdc_coins26/03_train.sh`, the E0 fine-tuning recreated the paper's checkpoints bit for bit for seeds 0 and 1 (test accuracy 0.9624 and 0.9500). The reimplemented noise-aware LoRA lands within the paper's spread (0.911 and 0.898 vs 0.916 and 0.880). Flying Figs. 2-3 on these models gives a mean difference of -0.007 from the paper over 92 points, with 93% within two standard errors.
+
+The findings of [25] hold in the reproduction:
+
+* Drift alone takes the naive chip from 0.865 to 0.27 within an hour.
+* Global drift compensation is the decisive mitigation (0.12 -> 0.66 at 12 months), and recalibration adds 11 to 24 points on top.
+* Noise-aware LoRA helps before recalibration (0.78 vs 0.66) but not after it (0.890 vs 0.900).
+* At 12 months, fully mitigated: SONOS 0.910 > PCM 0.889 > ReRAM pair 0.822 > ReRAM single device 0.562.
+* Fully mitigated PCM keeps 0.85 up to 100 krad(Si) when freshly programmed (0.80 after 12 months). SONOS with the charge-loss channel collapses between 10 and 30 krad(Si) (0.81 -> 0.24).
+* Fully mitigated PCM is best near the 25 C reference temperature (0.917 fresh) and loses accuracy toward both ends of the -100 to 125 C range.
+
+`python space_main.py plot` draws the curves of Figs. 2 and 5-8 from the result files.
+
+**Reproducing these results.** The scripts in [`scripts/sdc_coins26/`](scripts/sdc_coins26/README.md) run the whole study from an empty folder; their README is a step-by-step tutorial covering time per step, reusing existing checkpoints, reading the comparison, and troubleshooting:
+
+```bash
+bash scripts/sdc_coins26/00_setup.sh        # Python environment
+bash scripts/sdc_coins26/01_download.sh     # EuroSAT_MS, official splits, Presto weights
+bash scripts/sdc_coins26/02_build_cache.sh  # GeoTIFFs -> array cache
+bash scripts/sdc_coins26/smoke_test.sh      # 3-minute check of the whole pipeline
+bash scripts/sdc_coins26/03_train.sh        # E0 and E2 for seeds 0-9
+bash scripts/sdc_coins26/04_missions.sh     # Figs. 2-8 (add --full for 10 seeds everywhere)
+bash scripts/sdc_coins26/05_report.sh       # every point next to the paper's value, and the figures
+```
+
+To fly the paper's own checkpoints, as above, set `E0_PATTERN` and `E2_PATTERN` to them and skip `03_train.sh`. `space_main.py summarize` compares every point with the paper's values, which ship in `src/spacecim/paper_coins26.json`, and reports z-scores.
 
 ---
 
@@ -551,6 +742,40 @@ The non-ideality models implemented in this toolkit are phenomenological, design
 
 ---
 
+## Space Environment and Mission Models
+
+These models (`src/spacecim/`) reproduce the compute-in-memory case study of [25]. A mission programs the crossbars once, on the ground, and reads them at checkpoints from 1 s to 12 months; each read starts from the programmed state at time `t`, while upsets accumulate from checkpoint to checkpoint.
+
+### Devices and Cell Mapping
+
+Each tile normalizes its weights so that `max|w| = 1` maps to `G_max`. Following aihwkit [27], the conductances are re-derived from the programmed weights at every read, so the idle leg of a differential pair reads back at its floor.
+
+| Device | Mapping | Programming error | Time dependence | Basis |
+|---|---|---|---|---|
+| PCM | pair, `G` in [0, 25] µS | `sigma = 0.263 + 1.965 g - 1.173 g^2` µS, `g = G / G_max` | drift `G (t / t0)^(-nu)`, `nu ~ N(mu(g), sigma(g))` per device, `mu` in [0.049, 0.1]; 1/f read noise `Q_s(g) sqrt(ln((t + t_r) / 2 t_r))` | measured PCM [26], aihwkit `PCMLikeNoiseModel` [27] |
+| ReRAM (CMO/HfOx) | single device over [9, 25] µS (offset-binary), or differential pair with the 9 µS floor on both legs | `0.0008 + 0.0011 G` µS (0.2 % program-and-verify) | absolute decay `-0.089 ln t` µS, spread `0.042 ln t + 0.41` µS, read noise | aihwkit `ReRamCMONoiseModel` [27] |
+| SONOS | pair, [0, 16] µS at `V_read = 0.1` V | `20 (1 - exp(-I / 176 nA))` nA | measured retention polynomial and spread for 0-5 days; projected beyond under a log (default), power or linear law | 40 nm SONOS, 128K devices [30, 31] |
+
+The mapping decides how a decay presents: an absolute conductance loss is an offset under the single-device mapping but a gain under the differential pair, which drift compensation can invert [25].
+
+### Tile Periphery
+
+256 x 256 tiles (balanced splits of larger layers), a 6-bit DAC with per-row ABS_MAX input scaling, additive weight read noise of 2 % of the tile's `w_max` per read, output noise 0.02, an 8-bit ADC with bound 12, digital bias, and the classifier head in digital logic. This is the configuration of [25] on the aihwkit torch tile [27].
+
+### Space Environment
+
+* **Single-event upsets**: per tile, `N_hits ~ Poisson(lambda N_devices dt)` between reads, `lambda = 1e-6` per device per day nominal. A hit redraws the conductance uniformly in `[G_min, G_max]` with probability 0.8, else leaves it stuck at a bound. For the charge-trap SONOS cell, a hit removes a random fraction of the stored charge instead. Upset cells keep their value for the rest of the mission [25, 37].
+* **Total ionizing dose**: `dose(t) = offset + rate t`, 1 krad(Si) per year nominal. The read-noise sigma is broadened by `1 + 0.05 dose`. An optional charge-loss channel shifts conductances by a fraction, or by a fixed quantum `k_shift dose G_max` clamped at `G_min` (`absolute`), which shrinks the weights of a differential pair instead of scaling them [25, 36].
+* **Temperature**: drift exponent `nu * T_op / T_ref`, read noise `(T_op / T_ref)^0.5`, and thermally activated conduction `G exp(-E_a / k_B (1/T_op - 1/T_ref))`. Here `E_a` is interpolated against `G / G_max` from 0.30 eV (amorphous) to 0.02 eV (crystalline), a state-dependent distortion of the weight map [25, 35].
+
+### Mitigations
+
+* **Noise-aware LoRA** (design time): `W' = W + (16 / 8) B A` on the attention and MLP projections, Gaussian noise of 0.1 `max|W'|` on the effective weight during training, merged before mapping [25, 20, 28].
+* **Global drift compensation** (runtime, label-free): the identity matrix is applied as a probe after programming and at every read, and the tile outputs are scaled by `alpha = mean|ref| / mean|cur|` [29].
+* **Recalibration** (runtime, labelled): at every checkpoint the digital LayerNorm affine terms and the head (3,850 parameters) are refit on 250 class-stratified validation images for 5 epochs (AdamW, lr 1e-3, batch 16), starting from the launch parameters. Gradients pass through the analog tiles as the ideal product with their present weights. `E4_head` fits the head only, which needs forward passes alone [25].
+
+---
+
 
 ## Citing This Work
 If you use PyRRAM-Sim in your research, we kindly ask that you cite the following paper:
@@ -563,7 +788,7 @@ If you use PyRRAM-Sim in your research, we kindly ask that you cite the followin
 }
 ```
 
-If you use the alignment evaluation or HARD-DPO, please also cite [16]; for MoF-LoRA experts, [17]; for Sparse-MoF expert selection, read-noise and temperature experts, [18]:
+If you use the alignment evaluation or HARD-DPO, please also cite [16]; for MoF-LoRA experts, [17]; for Sparse-MoF expert selection, read-noise and temperature experts, [18]; for the space-environment mission models, [25]:
 
 ```bibtex
 @article{Ahmed2026HARDDPO,
@@ -582,6 +807,14 @@ If you use the alignment evaluation or HARD-DPO, please also cite [16]; for MoF-
   pages   = {563--576},
   year    = {2026},
   doi     = {10.1109/JETCAS.2026.3655242},
+}
+
+@inproceedings{Ahmed2026SDC,
+  title     = {Space Data Centers ({SDCs}): Rethinking Computing Infrastructure Beyond Earth},
+  author    = {Ahmed, Soyed Tuhin and Farahani, Bahar and Chakrabarty, Krishnendu and Firouzi, Farshad},
+  booktitle = {IEEE International Conference on Omni Layer Intelligent Systems (COINS)},
+  year      = {2026},
+  doi       = {10.1109/COINS69995.2026.11715566},
 }
 
 @inproceedings{Sharma2026HATFI,
@@ -643,3 +876,29 @@ If you use the alignment evaluation or HARD-DPO, please also cite [16]; for MoF-
 [23] Qwen Team, "Qwen2.5 Technical Report," *arXiv preprint arXiv:2412.15115*, 2024.
 
 [24] K. Schnieders, C. Funck, et al., "Effect of Electron Conduction on the Read Noise Characteristics in ReRAM Devices," *APL Materials*, vol. 10, no. 10, 2022.
+
+[25] S. T. Ahmed, B. Farahani, K. Chakrabarty, and F. Firouzi, "Space Data Centers (SDCs): Rethinking Computing Infrastructure Beyond Earth," *IEEE International Conference on Omni Layer Intelligent Systems (COINS)*, 2026, doi: 10.1109/COINS69995.2026.11715566.
+
+[26] S. R. Nandakumar, M. Le Gallo, I. Boybat, et al., "A phase-change memory model for neuromorphic computing," *Journal of Applied Physics*, vol. 124, no. 15, 2018.
+
+[27] M. J. Rasch, D. Moreda, T. Gokmen, et al., "A flexible and fast PyTorch toolkit for simulating training and inference on analog crossbar arrays," *IEEE International Conference on Artificial Intelligence Circuits and Systems (AICAS)*, 2021 (IBM aihwkit, https://github.com/IBM/aihwkit, MIT license; version 1.1.0 used for validation).
+
+[28] M. J. Rasch, C. Mackin, M. Le Gallo, et al., "Hardware-aware training for large-scale and diverse deep learning inference workloads using in-memory computing-based accelerators," *Nature Communications*, vol. 14, p. 5282, 2023.
+
+[29] V. Joshi, M. Le Gallo, S. Haefeli, et al., "Accurate deep neural network inference using computational phase-change memory," *Nature Communications*, vol. 11, p. 2473, 2020.
+
+[30] V. Agrawal, T. P. Xiao, C. H. Bennett, et al., "Subthreshold operation of SONOS analog memory to enable accurate low-power neural network inference," *IEEE International Electron Devices Meeting (IEDM)*, 2022, pp. 21.7.1-21.7.4.
+
+[31] Sandia National Laboratories, "CrossSim: Accuracy simulation of analog in-memory computing," https://github.com/sandialabs/cross-sim.
+
+[32] G. Tseng, R. Cartuyvels, I. Zvonkov, et al., "Lightweight, pre-trained transformers for remote sensing timeseries," *arXiv preprint arXiv:2304.14065*, 2023 (Presto, https://github.com/nasaharvest/presto, MIT license).
+
+[33] P. Helber, B. Bischke, A. Dengel, et al., "EuroSAT: A novel dataset and deep learning benchmark for land use and land cover classification," *IEEE Journal of Selected Topics in Applied Earth Observations and Remote Sensing*, vol. 12, no. 7, pp. 2217-2226, 2019.
+
+[34] M. Neumann, A. S. Pinto, X. Zhai, et al., "Training general representations for remote sensing using in-domain knowledge," *IEEE International Geoscience and Remote Sensing Symposium (IGARSS)*, 2020, pp. 6730-6733.
+
+[35] M. Le Gallo and A. Sebastian, "An overview of phase-change memory device physics," *Journal of Physics D: Applied Physics*, vol. 53, no. 21, p. 213002, 2020.
+
+[36] X. Zhang, Q. Guo, D. Zhou, et al., "Total ionizing dose (TID) of phase change random access memory," *4th International Conference on Radiation Effects of Electronic Devices (ICREED)*, 2021, pp. 1-6.
+
+[37] Z. Yao, L. Yue, F. Zhang, et al., "Single-event effects induced by heavy ions in 40 nm resistive random access memory," *IEEE 6th Advanced Information Technology, Electronic and Automation Control Conference (IAEAC)*, 2022, pp. 1437-1441.

@@ -112,3 +112,19 @@ class SimulatorNoise:
             W = W.clamp(-lim, lim)
         mean, std = self.sim.weight_noise_moments(W, self.alpha_ind, self.alpha_prop)
         return W + mean.to(W.device) + std.to(W.device) * torch.randn_like(W)
+
+
+class AbsMaxGaussianNoise:
+    """
+    Additive Gaussian noise on the effective weight with sigma = std * max|W_eff| of the
+    tensor, i.e. relative to the weight that the tile normalization maps to G_max
+    (noise-aware LoRA of the COINS'26 space-CiM case study, std = 0.1; hardware-aware
+    training practice of IBM aihwkit).
+    """
+
+    def __init__(self, std: float = 0.1):
+        self.std = std
+
+    def __call__(self, m) -> torch.Tensor:
+        W = m.effective_weight()
+        return W + torch.randn_like(W) * (self.std * W.detach().abs().max())
