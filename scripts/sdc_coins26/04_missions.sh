@@ -9,10 +9,12 @@
 #
 # Default seed plan: 10 seeds for Figs. 2-4 (as in the paper), 5 for Fig. 5, 2 for Figs. 6-8.
 # EVAL_BATCH=16 lowers the GPU memory per job (default 39 images = 40,920 patches).
+# --fused adds a cheaper recalibration backward to torch.compile (faster; statistically identical).
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
 
 COMPILE=1
+FUSED=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --figures) FIGURES="$2"; shift 2 ;;
@@ -20,6 +22,7 @@ while [[ $# -gt 0 ]]; do
     --full) FIGURE_SEEDS=""; shift ;;
     --gpus) read -r -a GPU_LIST <<< "${2//,/ }"; shift 2 ;;
     --no-compile) COMPILE=0; shift ;;
+    --fused) FUSED=1; shift ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -51,7 +54,11 @@ args=(--cache-dir "$CACHE_DIR" --e0 "$E0_PATTERN" --e2 "$E2_PATTERN" --out-dir "
 [[ -n "${EVAL_BATCH:-}" ]] && args+=(--eval-batch "$EVAL_BATCH")   # images per batch; lower it on small GPUs
 if [[ ${#GPU_LIST[@]} -gt 0 ]]; then
   args+=(--gpus "${GPU_LIST[@]}")
-  (( COMPILE )) && args+=(--compile)
+  if (( FUSED )); then
+    args+=(--fused)
+  elif (( COMPILE )); then
+    args+=(--compile)
+  fi
 else
   echo "WARNING: no GPU found; the missions run on the CPU (days, not hours)" >&2
   args+=(--gpus "")

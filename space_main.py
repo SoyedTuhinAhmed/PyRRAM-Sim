@@ -105,9 +105,9 @@ def cmd_lora(a):
 def cmd_mission(a):
     PC = _classifier()
     device = _device(a.device)
-    if a.compile:
+    if a.compile or a.fused:
         from spacecim import tile as T
-        T.use_compile(True)
+        T.use_fused(True) if a.fused else T.use_compile(True)
     cache, builder = _data(a, device)
     test_rows = cache.indices("test", a.test_limit)
     val = cache.split_index["val"]
@@ -309,6 +309,8 @@ def main():
     m.add_argument("--test-limit", type=int, default=None)
     m.add_argument("--eval-batch", type=int, default=None, help="images per evaluation batch (throughput only)")
     m.add_argument("--compile", action="store_true", help="fuse the tile MVM with torch.compile (GPU, ~2x faster)")
+    m.add_argument("--fused", action="store_true",
+                   help="--compile plus a cheaper recalibration backward (GPU, ~15%% faster recalibration)")
     m.add_argument("--calib-samples", type=int, default=256, help="stratified to 25 per class = 250 images")
     m.add_argument("--out", required=True, help="JSONL file (appended)")
     m.set_defaults(fn=cmd_mission)

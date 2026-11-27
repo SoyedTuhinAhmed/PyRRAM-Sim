@@ -50,6 +50,7 @@ def main():
     p.add_argument("--per-gpu", type=int, default=1, help="concurrent jobs per GPU")
     p.add_argument("--eval-batch", type=int, default=None)
     p.add_argument("--compile", action="store_true", help="torch.compile the tile MVM (GPU)")
+    p.add_argument("--fused", action="store_true", help="--compile plus a cheaper recalibration backward (GPU)")
     p.add_argument("--out-dir", required=True)
     p.add_argument("--python", default=sys.executable)
     a = p.parse_args()
@@ -86,7 +87,9 @@ def main():
                    "--out", stem + ".jsonl"]
             if a.eval_batch:
                 cmd += ["--eval-batch", str(a.eval_batch)]
-            if a.compile:
+            if a.fused:
+                cmd += ["--fused"]
+            elif a.compile:
                 cmd += ["--compile"]
             env = dict(os.environ, CUDA_VISIBLE_DEVICES=slot)
             if os.path.exists(stem + ".jsonl"):

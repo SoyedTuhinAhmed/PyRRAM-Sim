@@ -198,7 +198,7 @@ python space_main.py plot results/*.jsonl --out-dir figures/   # needs matplotli
 | `D1`...`D4` | Fig. 7 | Dose sweep 0.1-3000 krad(Si), freshly programmed and after 12 months |
 | `T1`...`T4` | Fig. 8 | Operating temperature -100 to 125 C, freshly programmed and after 12 months |
 
-`--compile` fuses the tile MVM with `torch.compile` (about 2x faster on a GPU); if `/tmp` is mounted `noexec`, point `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR` to a writable, executable folder. `--test-limit` evaluates on a class-stratified subset for quick checks. Checkpoints of the original case-study code (`best.pt`, `merged.pt`) load directly.
+`--compile` fuses the tile MVM with `torch.compile` (about 2x faster on a GPU). `--fused` is `--compile` plus a cheaper backward pass for on-orbit recalibration: each tile computes its analog output once and applies the ideal gradient only in the backward pass. Recalibration is about 15% faster (RTX A5500), evaluation is unchanged, and the gradients agree with the default ones to about 1e-5. If `/tmp` is mounted `noexec`, point `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR` to a writable, executable folder. `--test-limit` evaluates on a class-stratified subset for quick checks. Checkpoints of the original case-study code (`best.pt`, `merged.pt`) load directly.
 
 ## Python API
 

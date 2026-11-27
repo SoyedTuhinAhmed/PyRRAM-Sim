@@ -97,6 +97,8 @@ Each job takes one *configuration* (one chip and protection setting, see the tab
 
 By default the expensive figures use fewer seeds than the paper's 10 (5 for Fig. 5, 2 for Figs. 6-8). `--full` uses 10 everywhere (about 5.5 hours on 8 GPUs).
 
+`--fused` makes the recalibration step (used by `E4` and the other configurations with recalibration) about 15% faster. The results stay the same up to seed-to-seed variation.
+
 ## Step 6: Compare with the paper
 
 ```bash

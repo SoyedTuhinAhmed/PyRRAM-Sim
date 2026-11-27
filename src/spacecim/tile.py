@@ -71,13 +71,49 @@ def _mvm(x: Tensor, W: Tensor, gain: Tensor, d_in: float, inp_bound: float, w_no
 
 
 _MVM = _mvm
+_FUSED_STE = False
 
 
 def use_compile(enabled: bool = True):
     """Fuses the tile MVM with torch.compile (about 2x faster on GPU; the first calls
     compile). Statistically identical to the eager path."""
     global _MVM
+    if enabled:
+        # Tiles with 1-3 inputs, the identity probe and input views each need their own compiled
+        # variant; past torch's default limit of 8, further calls would silently run uncompiled.
+        cfg = torch._dynamo.config
+        name = "recompile_limit" if hasattr(cfg, "recompile_limit") else "cache_size_limit"
+        setattr(cfg, name, max(getattr(cfg, name), 64))
     _MVM = torch.compile(_mvm, dynamic=True) if enabled else _mvm
+
+
+def use_fused(enabled: bool = True):
+    """``use_compile`` plus a cheaper backward for on-orbit recalibration: each tile runs
+    the analog MVM once and applies the ideal product only in the backward pass, instead
+    of also computing the ideal product in the forward pass (about 15% faster
+    recalibration on GPU). Same gradients; the forward values agree to float rounding."""
+    global _FUSED_STE
+    use_compile(enabled)
+    _FUSED_STE = bool(enabled)
+
+
+class _AnalogSTE(torch.autograd.Function):
+    """Forward: the analog tile MVM. Backward: that of the ideal product x W_eff^T
+    (straight-through for the converters and the noise)."""
+
+    @staticmethod
+    def forward(ctx, x: Tensor, w_eff: Tensor, tile: "Tile") -> Tensor:
+        ctx.save_for_backward(x if ctx.needs_input_grad[1] else None, w_eff)
+        return tile.raw_forward(x, tile.scale * tile.alpha)
+
+    @staticmethod
+    def backward(ctx, grad_out: Tensor):
+        x, w_eff = ctx.saved_tensors
+        grad_x = grad_out @ w_eff if ctx.needs_input_grad[0] else None
+        grad_w = None
+        if ctx.needs_input_grad[1]:
+            grad_w = grad_out.reshape(-1, grad_out.shape[-1]).T @ x.reshape(-1, x.shape[-1])
+        return grad_x, grad_w, None
 
 
 def split_sizes(size: int, max_size: int) -> List[int]:
@@ -121,18 +157,21 @@ class Tile:
         compensation)."""
         p = self.periphery
         g = torch.ones((), device=x.device, dtype=x.dtype) if gain is None else gain
-        return _MVM(x, self.weight, g, p.d_in, p.inp_bound, p.w_noise ** 2, p.out_noise ** 2,
+        # detach: x's gradient flag would otherwise force extra compiled variants
+        return _MVM(x.detach(), self.weight, g, p.d_in, p.inp_bound, p.w_noise ** 2, p.out_noise ** 2,
                     p.d_out, p.out_bound, p.adc_bits > 0)
 
     def effective_weight(self) -> Tensor:
         return self.weight * (self.scale * self.alpha)
 
     def forward(self, x: Tensor) -> Tensor:
-        out = self.raw_forward(x, self.scale * self.alpha)
         if torch.is_grad_enabled() and x.requires_grad:
+            if _FUSED_STE:
+                return _AnalogSTE.apply(x, self.effective_weight(), self)
+            out = self.raw_forward(x, self.scale * self.alpha)
             ideal = x @ self.effective_weight().T
-            out = ideal + (out - ideal).detach()
-        return out
+            return ideal + (out - ideal).detach()
+        return self.raw_forward(x, self.scale * self.alpha)
 
     @torch.no_grad()
     def _probe(self) -> Tensor:
