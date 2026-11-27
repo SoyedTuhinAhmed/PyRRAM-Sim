@@ -1,0 +1,124 @@
+{
+ "source": "llm_main.py eval on Qwen2.5-0.5B-Instruct, UltraFeedback test_prefs (98 pairs), 3 simulated chips per point; see docs/reproducing_the_papers.md",
+ "default_protocol": {
+  "instruction_tuned": {
+   "0.0": {
+    "flip_rate": 1.8867924528301885,
+    "flip_rate_ci95": 3.077381219020199e-16,
+    "clean_acc": 54.08163070678711,
+    "chip_acc": 53.06122303009033,
+    "chips": 3
+   },
+   "0.004": {
+    "flip_rate": 6.289308176100628,
+    "flip_rate_ci95": 1.2327044025157237,
+    "clean_acc": 54.08163070678711,
+    "chip_acc": 51.36054356892904,
+    "chips": 3
+   },
+   "0.008": {
+    "flip_rate": 16.352201257861637,
+    "flip_rate_ci95": 6.522858578222135,
+    "clean_acc": 54.08163070678711,
+    "chip_acc": 50.34013589223226,
+    "chips": 3
+   }
+  },
+  "clipping_only": {
+   "0.0": {
+    "flip_rate": 0.0,
+    "flip_rate_ci95": 0.0,
+    "clean_acc": 40.816327929496765,
+    "chip_acc": 41.83673560619354,
+    "chips": 3
+   },
+   "0.004": {
+    "flip_rate": 5.833333333333333,
+    "flip_rate_ci95": 3.2666666666666666,
+    "clean_acc": 40.816327929496765,
+    "chip_acc": 43.19727917512258,
+    "chips": 3
+   },
+   "0.008": {
+    "flip_rate": 10.0,
+    "flip_rate_ci95": 2.829016319029167,
+    "clean_acc": 40.816327929496765,
+    "chip_acc": 43.19727917512258,
+    "chips": 3
+   }
+  },
+  "hard_dpo_paper_checkpoint": {
+   "0.0": {
+    "flip_rate": 0.0,
+    "flip_rate_ci95": 0.0,
+    "clean_acc": 55.10203838348389,
+    "chip_acc": 55.10203838348389,
+    "chips": 3
+   },
+   "0.004": {
+    "flip_rate": 0.0,
+    "flip_rate_ci95": 0.0,
+    "clean_acc": 55.10203838348389,
+    "chip_acc": 55.10203838348389,
+    "chips": 3
+   },
+   "0.008": {
+    "flip_rate": 0.0,
+    "flip_rate_ci95": 0.0,
+    "clean_acc": 55.10203838348389,
+    "chip_acc": 55.10203838348389,
+    "chips": 3
+   }
+  },
+  "hard_dpo_100_steps_laptop": {
+   "0.0": {
+    "flip_rate": 0.0,
+    "flip_rate_ci95": 0.0,
+    "clean_acc": 54.08163070678711,
+    "chip_acc": 56.122446060180664,
+    "chips": 3
+   },
+   "0.004": {
+    "flip_rate": 0.0,
+    "flip_rate_ci95": 0.0,
+    "clean_acc": 54.08163070678711,
+    "chip_acc": 54.42176659901937,
+    "chips": 3
+   },
+   "0.008": {
+    "flip_rate": 1.2578616352201257,
+    "flip_rate_ci95": 1.2327044025157232,
+    "clean_acc": 54.08163070678711,
+    "chip_acc": 53.74149481455485,
+    "chips": 3
+   }
+  }
+ },
+ "released_protocol_alpha_0.008": {
+  "pyrram_sim": {
+   "instruction_tuned": {
+    "flip_rate": 23.702991452991455,
+    "flip_rate_ci95": 13.30086229907832,
+    "clean_acc": 56.00000023841858,
+    "chip_acc": 52.799999713897705,
+    "chips": 5
+   },
+   "hard_dpo": {
+    "flip_rate": 2.0,
+    "flip_rate_ci95": 2.743428511917159,
+    "clean_acc": 62.40000009536743,
+    "chip_acc": 62.40000009536743,
+    "chips": 5
+   }
+  },
+  "paper": {
+   "instruction_tuned": {
+    "flip_rate": 33.0
+   },
+   "hard_dpo": {
+    "flip_rate": 2.0
+   },
+   "note": "HARD-DPO paper, Sec. V: 'HARD-DPO keeps the flip rate near 2% ... 33% for the instruction-tuned model' at alpha_prog = 0.008"
+  }
+ }
+}

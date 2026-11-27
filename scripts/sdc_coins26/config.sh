@@ -38,7 +38,7 @@ done
 
 # --- seeds -----------------------------------------------------------------
 # The paper uses 10 seeds (= 10 trained models x 10 simulated chips). FIGURE_SEEDS lowers the
-# count for the expensive figures; the defaults are the ones of the reproduction in the README.
+# count for the expensive figures; the defaults are those of docs/reproducing_the_papers.md.
 SEEDS="${SEEDS:-0 1 2 3 4 5 6 7 8 9}"
 FIGURE_SEEDS="${FIGURE_SEEDS:-fig5=0,1,2,3,4 fig6=0,1 fig7=0,1 fig8=0,1}"
 FIGURES="${FIGURES:-fig2 fig3 fig5 fig6 fig7 fig8}"

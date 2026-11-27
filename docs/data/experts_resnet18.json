@@ -1,0 +1,56 @@
+{
+ "source": "mof_main.py --steps 200 --chips 2 on CIFAR-10 ResNet18 (10,000 test images), mean over 2 chips",
+ "conditions": [
+  "ideal chip",
+  "+ programming error",
+  "+ drift",
+  "+ stuck-at faults",
+  "+ read noise"
+ ],
+ "accuracy": {
+  "unprotected": [
+   94.99,
+   93.64,
+   91.71,
+   10.01,
+   10.06
+  ],
+  "mof-lora": [
+   88.67,
+   88.31,
+   87.69,
+   89.94,
+   89.85
+  ],
+  "sparse-mof": [
+   94.76,
+   93.53,
+   91.47,
+   89.57,
+   89.45
+  ]
+ },
+ "sparse_mof_selected": [
+  [
+   "prog"
+  ],
+  [
+   "prog"
+  ],
+  [
+   "prog",
+   "drift"
+  ],
+  [
+   "prog",
+   "drift",
+   "saf"
+  ],
+  [
+   "prog",
+   "drift",
+   "saf",
+   "read"
+  ]
+ ]
+}

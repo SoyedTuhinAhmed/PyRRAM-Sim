@@ -1,0 +1,21 @@
+{
+ "source": "main.py on CIFAR-10 ResNet18, full test set, 8-bit cells (see docs/tutorials/1_first_simulation.md)",
+ "digital_accuracy": 94.98,
+ "rows": [
+  {
+   "chip": "ideal chip (no faults)",
+   "stuck_cells_percent": 0.0,
+   "accuracy": 94.99
+  },
+  {
+   "chip": "1.2% stuck cells (8 binary cells per weight)",
+   "stuck_cells_percent": 1.2,
+   "accuracy": 91.59
+  },
+  {
+   "chip": "10.8% stuck cells (measured on a real test chip)",
+   "stuck_cells_percent": 10.8,
+   "accuracy": 10.0
+  }
+ ]
+}
