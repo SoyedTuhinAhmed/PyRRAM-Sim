@@ -125,12 +125,14 @@ python llm_main.py train-hard-dpo --model Qwen/Qwen2.5-0.5B-Instruct --steps 100
 python llm_main.py eval --model Qwen/Qwen2.5-0.5B-Instruct --experts hard_dpo.pt \
     --deploy merged --clip-sigma 3 --out hard_dpo.json
 
-# A HARD-DPO checkpoint from the original PEFT scripts (lora_alpha 16), adapters kept digital
-python llm_main.py eval --peft-adapter noise_robust_dpo_qwen2.5_0.5b.pt --lora-alpha 16 --deploy hybrid
+# A HARD-DPO checkpoint from the original PEFT scripts, adapters kept digital; --lora-alpha must match
+# the checkpoint's training (the scripts' default is 16; the paper's checkpoint used 128)
+python llm_main.py eval --clip-sigma 3 --peft-adapter noise_robust_dpo_qwen2.5_0.5b.pt --lora-alpha 128 --deploy hybrid
 
 # Released-script protocol (train_prefs[:500], 50 pairs per chip, G = 50-350 uS unquantized,
 # every Linear including lm_head) to reproduce previously published numbers
-python llm_main.py eval --legacy-eval --peft-adapter noise_robust_dpo_qwen2.5_0.5b.pt
+python llm_main.py eval --legacy-eval --alphas 0.008 --chips 5 --batch-size 1 --max-length 2048 --low-memory \
+    --clip-sigma 3 --peft-adapter noise_robust_dpo_qwen2.5_0.5b.pt --lora-alpha 128 --deploy hybrid
 
 # Fault-tolerant experts trained with the DPO objective; the SAF expert targets chip --fault-seed 7
 python llm_main.py train-experts --train prog drift saf read --recipe hat-fi-llm --objective dpo \

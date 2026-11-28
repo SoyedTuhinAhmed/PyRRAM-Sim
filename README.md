@@ -42,15 +42,17 @@ python main.py --dataset-path ./data --n-levels 256 --apply-stuck-at --p-on 0.09
 
 The accuracy falls to 10%, which is random guessing. [Tutorial 1](docs/tutorials/1_first_simulation.md) explains why, and [tutorial 2](docs/tutorials/2_fault_tolerant_experts.md) shows how to fix it.
 
-## Does it reproduce the papers?
+## Reproducing selected papers
 
-| Paper | Result |
-|---|---|
-| **HARD-DPO** (IEEE TCAD 2026) | HARD-DPO removes **92%** of an LLM's preference flips on a noisy chip (paper: 94%) |
-| **MoF-LoRA** (IEEE JETCAS 2026) and **HAT-FI** (IEEE VTS 2026) | Fault-tolerant experts bring a network with broken cells back from **10% to 90%** accuracy |
-| **Space Data Centers** (IEEE COINS 2026) | **95%** of the paper's 532 results are reproduced within seed-to-seed variation |
+PyRRAM-Sim comes with the commands to reproduce the main results of these papers. Our own runs gave:
 
-We believe the small differences come from randomness: every simulated chip draws its own random errors (its *seed*), so two sets of chips never give exactly the same average. 95% is what a perfect reproduction scores, since even two runs of the same simulator agree on only about 95% of the points by this test. Figures and details: **[Reproducing the papers](docs/reproducing_the_papers.md)**.
+| Paper | Result | How |
+|---|---|---|
+| **HARD-DPO** (IEEE TCAD 2026) | HARD-DPO removes **92%** of an LLM's preference flips on a noisy chip (paper: 94%) | [Tutorial 3](docs/tutorials/3_llm_alignment.md) |
+| **MoF-LoRA** (IEEE JETCAS 2026) and **HAT-FI** (IEEE VTS 2026) | Fault-tolerant experts bring a network with broken cells back from **10% to 90%** accuracy | [Tutorial 2](docs/tutorials/2_fault_tolerant_experts.md) |
+| **Space Data Centers** (IEEE COINS 2026) | **95%** of the paper's 532 results are reproduced within seed-to-seed variation | [Tutorial 5](docs/tutorials/5_space_ai.md) |
+
+We believe the small differences come from randomness: every simulated chip draws its own random errors (its *seed*), so two sets of chips never give exactly the same average. 95% is what a perfect reproduction scores, since even two runs of the same simulator agree on only about 95% of the points by this test. All commands, figures and details: **[Reproducing selected papers using PyRRAM-Sim](docs/reproducing_the_papers.md)**.
 
 ## Documentation
 
@@ -58,7 +60,7 @@ We believe the small differences come from randomness: every simulated chip draw
 |---|---|
 | [Concepts](docs/concepts.md) | In-memory computing, every effect and method explained in plain words, glossary |
 | [Tutorials](#tutorials) | Five step-by-step guides |
-| [Reproducing the papers](docs/reproducing_the_papers.md) | How close each reproduction is, with figures |
+| [Reproducing selected papers using PyRRAM-Sim](docs/reproducing_the_papers.md) | How to reproduce each paper's main result, and how close our runs came |
 | [Reference](docs/reference.md) | All files, command-line options, the Python API, and the physical models |
 | [References](docs/references.md) | The papers the models are based on |
 

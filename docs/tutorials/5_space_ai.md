@@ -117,7 +117,7 @@ This is what the reproduction looks like:
 
 ![A PCM chip over one year in orbit](../figures/sdc_mission.png)
 
-More figures and the explanation of the remaining differences: [Reproducing the papers](../reproducing_the_papers.md#space-data-centers-coins-2026).
+More figures and the explanation of the remaining differences: [Reproducing selected papers using PyRRAM-Sim](../reproducing_the_papers.md#space-data-centers-coins-2026).
 
 ## The configurations
 
